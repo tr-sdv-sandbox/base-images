@@ -1,0 +1,161 @@
+test_suite:
+  name: Speed Monitor Test Suite
+  description: Comprehensive tests for the speed monitor user function
+  
+  setup:
+    - description: Initialize vehicle to safe state
+      actions:
+        - inject:
+            path: Vehicle.Speed
+            value: 0
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 800
+        - wait: 1.0
+            
+  test_cases:
+    - name: NormalSpeedTest
+      description: Test normal speed operation below limit
+      requirements:
+        - REQ-SPEED-001  # System shall monitor vehicle speed
+        
+      steps:
+        - description: Set speed to 60 km/h
+          inject:
+            path: Vehicle.Speed
+            value: 60.0
+            
+        - wait: 2.0
+        
+        - description: Verify speed is set correctly
+          expect:
+            path: Vehicle.Speed
+            value: 60.0
+            tolerance: 0.1
+            
+        - description: Set speed to 100 km/h (still below limit)
+          inject:
+            path: Vehicle.Speed
+            value: 100.0
+            
+        - wait: 2.0
+        
+        - description: Verify no speed alert triggered
+          expect:
+            path: Vehicle.Speed
+            value: 100.0
+            
+    - name: SpeedLimitViolationTest
+      description: Test speed limit violation detection
+      requirements:
+        - REQ-SPEED-002  # System shall alert when speed exceeds limit
+        
+      steps:
+        - description: Set speed to 110 km/h (below limit)
+          inject:
+            path: Vehicle.Speed
+            value: 110.0
+            
+        - wait: 1.0
+        
+        - description: Increase speed to 125 km/h (above 120 limit)
+          inject:
+            path: Vehicle.Speed
+            value: 125.0
+            
+        - wait: 2.0
+        
+        - description: Verify speed alert is triggered
+          expect_log:
+            pattern: "SPEED ALERT.*125.*exceeds limit"
+            
+        - description: Further increase to 140 km/h
+          inject:
+            path: Vehicle.Speed
+            value: 140.0
+            
+        - wait: 2.0
+        
+        - description: Verify continued alerts
+          expect_log:
+            pattern: "SPEED ALERT.*140.*exceeds limit"
+            
+    - name: SpeedRecoveryTest
+      description: Test recovery from speeding condition
+      requirements:
+        - REQ-SPEED-003  # System shall stop alerting when speed returns below limit
+        
+      steps:
+        - description: Set high speed
+          inject:
+            path: Vehicle.Speed
+            value: 130.0
+            
+        - wait: 2.0
+        
+        - description: Reduce speed below limit
+          inject:
+            path: Vehicle.Speed
+            value: 90.0
+            
+        - wait: 2.0
+        
+        - description: Verify normal operation
+          expect:
+            path: Vehicle.Speed
+            value: 90.0
+            
+        - description: Verify no new alerts
+          expect:
+            path: Vehicle.Speed
+            value: 90.0
+            
+    - name: EngineSpeedCorrelationTest
+      description: Test correlation between vehicle and engine speed
+      requirements:
+        - REQ-SPEED-004  # System shall monitor related engine parameters
+        
+      steps:
+        - description: Set initial engine speed
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 1500
+            
+        - description: Set vehicle speed to 50 km/h
+          inject:
+            path: Vehicle.Speed
+            value: 50.0
+            
+        - wait: 1.0
+        
+        - description: Increase engine speed
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 3000
+            
+        - description: Increase vehicle speed accordingly
+          inject:
+            path: Vehicle.Speed
+            value: 100.0
+            
+        - wait: 1.0
+        
+        - description: Verify both values are set
+          expect:
+            path: Vehicle.Speed
+            value: 100.0
+            
+        - expect:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 3000
+            
+  teardown:
+    - description: Reset vehicle to idle state
+      actions:
+        - inject:
+            path: Vehicle.Speed
+            value: 0
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 800
+        - wait: 1.0

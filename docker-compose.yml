@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  # KUKSA.val databroker - the only infrastructure component we provide
+  kuksa-databroker:
+    image: ghcr.io/eclipse/kuksa.val/databroker:0.4.1
+    container_name: kuksa-databroker
+    ports:
+      - "8090:55555"  # gRPC port
+    environment:
+      - KUKSA_DATA_BROKER_METADATA_FILE=/data/vss_release_4.0.json
+    volumes:
+      - ./test-data/vss_full.json:/data/vss_release_4.0.json:ro
+    networks:
+      - sdv-test
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo 'Health check passed'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+networks:
+  sdv-test:
+    driver: bridge

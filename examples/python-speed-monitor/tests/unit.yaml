@@ -1,0 +1,38 @@
+test_suite:
+  name: "Speed Monitor Unit Tests"
+  description: "Quick unit tests for the speed monitor"
+  
+  test_cases:
+    - name: BoundaryTest
+      description: Test boundary values for speed limit
+      requirements:
+        - REQ-BOUNDARY-001
+        
+      steps:
+        - description: Test exactly at limit
+          inject:
+            path: Vehicle.Speed
+            value: 120.0  # Exactly at default limit
+            
+        - wait: 1.0
+        
+        - description: Should log but not alert
+          expect_log:
+            pattern: "Current speed: 120.0 km/h"
+            
+    - name: ZeroSpeedTest
+      description: Test behavior at zero speed
+      requirements:
+        - REQ-ZERO-001
+        
+      steps:
+        - description: Set zero speed
+          inject:
+            path: Vehicle.Speed
+            value: 0.0
+            
+        - wait: 1.0
+        
+        - description: Verify zero speed is handled
+          expect_log:
+            pattern: "Current speed: 0.0 km/h"

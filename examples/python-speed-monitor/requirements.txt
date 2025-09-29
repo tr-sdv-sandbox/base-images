@@ -1,0 +1,2 @@
+# Additional dependencies for the speed monitor
+# Base image already includes kuksa-client, pydantic, typing-extensions

@@ -1,0 +1,18 @@
+# Test results
+test-results/
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Docker
+.docker/
+
+# Temporary files
+*.tmp
+*.log
+temp/

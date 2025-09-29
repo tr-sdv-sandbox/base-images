@@ -1,0 +1,37 @@
+# Build stage - use the Alpine C++ build image with all dev tools
+FROM sdv-cpp-alpine-build:latest AS builder
+
+# Switch to root for building
+USER root
+
+# Copy source files
+COPY . /app/
+WORKDIR /app
+
+# Build the application and strip debug symbols
+RUN mkdir -p build && cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    strip --strip-all engine_monitor
+
+# Runtime stage - use minimal Alpine runtime base image
+FROM sdv-cpp-alpine-runtime:latest
+
+# Copy the compiled binary from builder
+COPY --from=builder /app/build/engine_monitor /usr/local/bin/
+
+# Switch back to non-root user (already set in base image)
+USER sdvuser
+
+# Set default environment variables
+ENV KUKSA_ADDRESS=kuksa-val-server \
+    KUKSA_PORT=55555 \
+    RPM_LIMIT=4500 \
+    TEMP_LIMIT=105.0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD pgrep engine_monitor || exit 1
+
+# Run the engine monitor
+CMD ["engine_monitor"]

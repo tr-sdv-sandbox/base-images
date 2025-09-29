@@ -1,0 +1,163 @@
+test_suite:
+  name: Engine Monitor Test Suite
+  description: Test the C++ engine monitor user function
+  
+  setup:
+    - description: Initialize engine to idle state
+      actions:
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 800
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 70.0
+        - wait: 1.0
+            
+  test_cases:
+    - name: NormalEngineOperation
+      description: Test monitor behavior under normal conditions
+      requirements:
+        - REQ-003  # Monitor shall handle normal operating conditions
+        
+      steps:
+        - description: Set normal RPM
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 2500.0
+            
+        - wait: 2.0
+        
+        - description: Set normal temperature
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 85.0
+            
+        - wait: 2.0
+        
+        - description: Verify RPM is logged
+          expect_log:
+            pattern: "RPM.*2500.*rpm"
+            
+        - description: Verify temperature is logged
+          expect_log:
+            pattern: "Temperature.*85.*°C"
+            
+    - name: HighRPMAlert
+      description: Test RPM limit detection
+      requirements:
+        - REQ-001  # Monitor shall detect high RPM conditions
+        
+      steps:
+        - description: Set RPM below limit
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 3000.0
+            
+        - wait: 1.0
+        
+        - description: Increase RPM above limit
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 5000.0
+            
+        - wait: 2.0
+        
+        - description: Verify RPM alert is triggered
+          expect_log:
+            pattern: "RPM ALERT.*5000.*exceeds limit of 4500"
+            
+    - name: HighTemperatureAlert
+      description: Test temperature limit detection
+      requirements:
+        - REQ-002  # Monitor shall detect high temperature conditions
+        
+      steps:
+        - description: Set temperature below limit
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 95.0
+            
+        - wait: 1.0
+        
+        - description: Increase temperature above limit
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 110.0
+            
+        - wait: 2.0
+        
+        - description: Verify temperature alert is triggered
+          expect_log:
+            pattern: "TEMPERATURE ALERT.*110.*exceeds limit of 105"
+            
+    - name: CombinedHighLoad
+      description: Test both RPM and temperature alerts
+      requirements:
+        - REQ-001
+        - REQ-002
+        
+      steps:
+        - description: Set high RPM
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 4800.0
+            
+        - wait: 1.0
+        
+        - description: Set high temperature
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 108.0
+            
+        - wait: 2.0
+        
+        - description: Verify RPM alert
+          expect_log:
+            pattern: "RPM ALERT.*4800.*exceeds limit"
+            
+        - description: Verify temperature alert
+          expect_log:
+            pattern: "TEMPERATURE ALERT.*108.*exceeds limit"
+            
+    - name: RecoveryToNormal
+      description: Test recovery from alert conditions
+      requirements:
+        - REQ-003
+        
+      steps:
+        - description: Set high values
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 5000.0
+            
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 110.0
+            
+        - wait: 2.0
+        
+        - description: Reduce to normal values
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 2000.0
+            
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 80.0
+            
+        - wait: 2.0
+        
+        - description: Verify normal operation resumed
+          expect_log:
+            pattern: "RPM.*2000.*rpm"
+            
+  teardown:
+    - description: Reset engine to idle state
+      actions:
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 800
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 70.0
+        - wait: 1.0

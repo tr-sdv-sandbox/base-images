@@ -1,0 +1,63 @@
+test_suite:
+  name: "Engine Monitor Stress Tests"
+  description: "Stress test the engine monitor with rapid changes"
+  
+  test_cases:
+    - name: RapidRPMChanges
+      description: Test handling of rapid RPM fluctuations
+      requirements:
+        - REQ-STRESS-001
+        
+      steps:
+        - description: Rapid RPM increase
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 1000
+            
+        - wait: 0.5
+        
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 3000
+            
+        - wait: 0.5
+        
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 5500  # Over limit
+            
+        - wait: 0.5
+        
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 2000
+            
+        - wait: 1.0
+        
+        - description: Verify alerts were triggered
+          expect_log:
+            pattern: "RPM ALERT.*5500.*exceeds"
+            
+    - name: SimultaneousAlerts
+      description: Test both RPM and temperature alerts together
+      requirements:
+        - REQ-STRESS-002
+        
+      steps:
+        - description: Set both values high
+          inject:
+            path: Vehicle.Powertrain.CombustionEngine.Speed
+            value: 5000
+            
+        - inject:
+            path: Vehicle.Powertrain.CombustionEngine.ECT
+            value: 110
+            
+        - wait: 2.0
+        
+        - description: Verify both alerts triggered
+          expect_log:
+            pattern: "RPM ALERT"
+            
+        - expect_log:
+            pattern: "TEMPERATURE ALERT"

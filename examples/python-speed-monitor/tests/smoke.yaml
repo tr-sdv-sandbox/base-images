@@ -1,0 +1,27 @@
+test_suite:
+  name: "Speed Monitor Smoke Tests"
+  description: "Quick smoke tests to verify basic functionality"
+  tags:
+    - smoke
+    - quick
+  
+  test_cases:
+    - name: BasicConnectivity
+      description: Verify the speed monitor can connect and receive signals
+      requirements:
+        - REQ-SMOKE-001
+      tags:
+        - smoke
+        
+      steps:
+        - description: Set initial speed
+          inject:
+            path: Vehicle.Speed
+            value: 50.0
+            
+        - wait: 2.0
+        
+        - description: Verify speed is logged
+          expect_log:
+            pattern: "Current speed: 50.0 km/h"
+            timeout: 3.0
