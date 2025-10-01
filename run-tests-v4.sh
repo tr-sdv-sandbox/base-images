@@ -201,8 +201,6 @@ fi
 TOTAL_SUITES=0
 PASSED_SUITES=0
 FAILED_SUITES=0
-RESULTS_ROOT="test-results/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$RESULTS_ROOT"
 
 # Set up cleanup function
 cleanup() {
@@ -212,8 +210,8 @@ cleanup() {
     if [ "$KEEP_RUNNING" != "true" ]; then
         if docker ps -a | grep -q "$CONTAINER_NAME"; then
             print_info "Stopping container: $CONTAINER_NAME"
-            docker stop "$CONTAINER_NAME" 2>/dev/null || true
-            docker rm "$CONTAINER_NAME" 2>/dev/null || true
+            docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+            docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
         fi
         
         # Stop test framework services
@@ -311,72 +309,21 @@ fi
 # Run each test file
 for test_file in "${TEST_FILES[@]}"; do
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
-    
+
     # Extract test file name for results
     test_name=$(basename "$test_file" .yaml)
-    results_dir="$RESULTS_ROOT/$test_name"
-    mkdir -p "$results_dir"
-    
+
     echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     print_info "Running test suite: $test_file"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-    
+
     # Build test framework command using new CLI
     TEST_FRAMEWORK_CMD=(
         docker run --rm
         --network "$NETWORK_NAME"
         -v "$(realpath "$test_file"):/app/test-suite.yaml:ro"
-        -v "$(realpath "$results_dir"):/app/results"
         -v /var/run/docker.sock:/var/run/docker.sock:ro
         -e CONTAINER_NAME="$CONTAINER_NAME"
-        sdv-test-framework-v4:latest
-        python -m kuksa_test.cli
-        /app/test-suite.yaml
-        --kuksa-url databroker:55555
-        --format json
-        --output /app/results/test-report.json
-    )
-    
-    # Add verbose flag if needed
-    if [ "$VERBOSE" = true ]; then
-        TEST_FRAMEWORK_CMD+=(--verbose)
-    fi
-    
-    # Add logging options
-    if [ -n "$LOG_DIR" ]; then
-        TEST_FRAMEWORK_CMD+=(--log-dir "/app/logs")
-        # Mount the log directory
-        TEST_FRAMEWORK_CMD=("${TEST_FRAMEWORK_CMD[@]:0:7}" -v "$(realpath "$LOG_DIR"):/app/logs" "${TEST_FRAMEWORK_CMD[@]:7}")
-    fi
-    
-    if [ -n "$CONSOLE_LOG_LEVEL" ]; then
-        TEST_FRAMEWORK_CMD+=(--console-log-level "$CONSOLE_LOG_LEVEL")
-    fi
-    
-    if [ "$NO_CONTAINER_LOGS" = true ]; then
-        TEST_FRAMEWORK_CMD+=(--no-container-logs)
-    fi
-    
-    # Run the test
-    "${TEST_FRAMEWORK_CMD[@]}"
-    TEST_EXIT_CODE=$?
-    
-    # Build console output command
-    CONSOLE_CMD=(
-        docker run --rm
-        --network "$NETWORK_NAME"
-        -v "$(realpath "$test_file"):/app/test-suite.yaml:ro"
-        -v "$(realpath "$results_dir"):/app/results"
-        -v /var/run/docker.sock:/var/run/docker.sock:ro
-        -e CONTAINER_NAME="$CONTAINER_NAME"
-    )
-    
-    # Add log directory mount if specified
-    if [ -n "$LOG_DIR" ]; then
-        CONSOLE_CMD+=(-v "$(realpath "$LOG_DIR"):/app/logs")
-    fi
-    
-    CONSOLE_CMD+=(
         sdv-test-framework-v4:latest
         python -m kuksa_test.cli
         /app/test-suite.yaml
@@ -384,22 +331,30 @@ for test_file in "${TEST_FILES[@]}"; do
         --format console
     )
     
+    # Add verbose flag if needed
+    if [ "$VERBOSE" = true ]; then
+        TEST_FRAMEWORK_CMD+=(--verbose)
+    fi
+
     # Add logging options
     if [ -n "$LOG_DIR" ]; then
-        CONSOLE_CMD+=(--log-dir "/app/logs")
+        TEST_FRAMEWORK_CMD+=(--log-dir "/app/logs")
+        # Mount the log directory
+        TEST_FRAMEWORK_CMD=("${TEST_FRAMEWORK_CMD[@]:0:7}" -v "$(realpath "$LOG_DIR"):/app/logs" "${TEST_FRAMEWORK_CMD[@]:7}")
     fi
-    
+
     if [ -n "$CONSOLE_LOG_LEVEL" ]; then
-        CONSOLE_CMD+=(--console-log-level "$CONSOLE_LOG_LEVEL")
+        TEST_FRAMEWORK_CMD+=(--console-log-level "$CONSOLE_LOG_LEVEL")
     fi
-    
+
     if [ "$NO_CONTAINER_LOGS" = true ]; then
-        CONSOLE_CMD+=(--no-container-logs)
+        TEST_FRAMEWORK_CMD+=(--no-container-logs)
     fi
-    
-    # Generate console output for immediate feedback
-    "${CONSOLE_CMD[@]}"
-    
+
+    # Run the test
+    "${TEST_FRAMEWORK_CMD[@]}"
+    TEST_EXIT_CODE=$?
+
     if [ $TEST_EXIT_CODE -eq 0 ]; then
         PASSED_SUITES=$((PASSED_SUITES + 1))
         print_info "✅ Test suite PASSED: $test_name"
@@ -413,12 +368,6 @@ for test_file in "${TEST_FILES[@]}"; do
         fi
     fi
 done
-
-# Show container logs once at the end
-echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-print_info "Container logs (last 50 lines):"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-docker logs "$CONTAINER_NAME" 2>&1 | tail -50
 
 # Summary report
 echo -e "\n${BLUE}═══════════════════════════════════════════════════════════${NC}"
@@ -435,42 +384,7 @@ fi
 echo -e "Total suites:    ${BLUE}$TOTAL_SUITES${NC}"
 echo -e "Passed:          ${GREEN}$PASSED_SUITES${NC}"
 echo -e "Failed:          ${RED}$FAILED_SUITES${NC}"
-echo -e "Results saved:   $RESULTS_ROOT"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
-
-# Create summary report
-cat > "$RESULTS_ROOT/summary.json" <<EOF
-{
-  "image": "$DOCKER_IMAGE",
-  "test_path": "$TEST_PATH",
-  "total_suites": $TOTAL_SUITES,
-  "passed_suites": $PASSED_SUITES,
-  "failed_suites": $FAILED_SUITES,
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "framework_version": "v4",
-  "suites": [
-EOF
-
-# Add individual suite results
-first=true
-for test_file in "${TEST_FILES[@]}"; do
-    test_name=$(basename "$test_file" .yaml)
-    report_file="$RESULTS_ROOT/$test_name/test-report.json"
-    if [ -f "$report_file" ]; then
-        if [ "$first" = true ]; then
-            first=false
-        else
-            echo "," >> "$RESULTS_ROOT/summary.json"
-        fi
-        echo -n "    {\"name\": \"$test_name\", \"file\": \"$test_file\", \"report\": \"$test_name/test-report.json\"}" >> "$RESULTS_ROOT/summary.json"
-    fi
-done
-
-cat >> "$RESULTS_ROOT/summary.json" <<EOF
-
-  ]
-}
-EOF
 
 # Exit with appropriate code
 if [ $FAILED_SUITES -eq 0 ]; then

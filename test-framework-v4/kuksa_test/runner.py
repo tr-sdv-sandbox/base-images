@@ -89,13 +89,13 @@ class TestRunner:
             return
             
         try:
-            # Follow logs from container
+            # Follow logs from container from the beginning
             process = subprocess.Popen(
                 ['docker', 'logs', '-f', self.container_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
-                bufsize=1
+                bufsize=0  # Unbuffered
             )
             
             while not self._stop_log_capture:
@@ -105,11 +105,12 @@ class TestRunner:
                 line = line.strip()
                 if line:
                     self.container_logs.append(line)
-                    # Use log manager if available
-                    if self.log_manager and self.capture_container_logs:
-                        self.log_manager.log_container_output(self.container_name, line)
-                    else:
-                        logger.info(f"[CONTAINER:{self.container_name}] {line}")
+                    # Print container logs directly (they have their own timestamps)
+                    # Use cyan color for container logs
+                    CYAN = '\033[36m'
+                    RESET = '\033[0m'
+                    if self.capture_container_logs:
+                        print(f"{CYAN}[CONTAINER:{self.container_name}] {line}{RESET}", flush=True)
                     
             process.terminate()
             
@@ -207,14 +208,17 @@ class TestRunner:
         
     async def run_test_case(self, test_case: TestCase) -> TestResult:
         """Run a single test case"""
+        # Print test start - entire line in green
+        GREEN = '\033[32m'
+        RESET = '\033[0m'
+        print(f"{GREEN}[ RUN      ] {test_case.name}{RESET}")
+
         # Set up test-specific logging
         if self.log_manager:
             self.log_manager.set_test_context(test_case.name)
             test_logger = self.log_manager.setup_test_logger(test_case.name)
-            test_logger.info(f"RUN {test_case.name}")
         else:
             test_logger = logger
-            test_logger.info(f"[ RUN      ] {test_case.name}")
         
         result = TestResult(
             test_case=test_case,
@@ -258,20 +262,20 @@ class TestRunner:
         finally:
             result.end_time = datetime.now()
             result.duration_ms = (result.end_time - result.start_time).total_seconds() * 1000
-            
-            # Log test completion in Google Test style
-            if self.log_manager:
-                test_logger = logging.getLogger(f"test.{test_case.name}")
-                if result.status == TestStatus.PASSED:
-                    test_logger.info(f"OK {test_case.name}", extra={'duration_ms': result.duration_ms})
-                else:
-                    test_logger.info(f"FAILED {test_case.name}", extra={'duration_ms': result.duration_ms})
-                self.log_manager.finish_test(test_case.name)
+
+            # Print test completion - entire line in color
+            GREEN = '\033[32m'
+            RED = '\033[31m'
+            RESET = '\033[0m'
+
+            if result.status == TestStatus.PASSED:
+                print(f"{GREEN}[       OK ] {test_case.name} ({result.duration_ms:.0f} ms){RESET}")
             else:
-                if result.status == TestStatus.PASSED:
-                    logger.info(f"[       OK ] {test_case.name} ({result.duration_ms:.0f} ms)")
-                else:
-                    logger.info(f"[  FAILED  ] {test_case.name} ({result.duration_ms:.0f} ms)")
+                print(f"{RED}[  FAILED  ] {test_case.name} ({result.duration_ms:.0f} ms){RESET}")
+
+            # Clean up test-specific logging
+            if self.log_manager:
+                self.log_manager.finish_test(test_case.name)
             
         return result
         

@@ -18,40 +18,21 @@ class TestReporter:
     """Generate test reports in various formats"""
     
     @staticmethod
-    def generate_report(report: TestReport, 
-                       format: str = "console",
-                       output: Optional[Union[str, Path]] = None) -> str:
+    def generate_report(report: TestReport, format: str = "console") -> str:
         """
-        Generate test report in specified format.
-        
+        Generate test report in console format.
+
         Args:
             report: Test execution report
-            format: Output format (console, json, markdown, junit)
-            output: Optional output file path
-            
+            format: Output format (only 'console' supported)
+
         Returns:
             Generated report as string
         """
-        if format == "console":
-            content = TestReporter._generate_console_report(report)
-        elif format == "json":
-            content = TestReporter._generate_json_report(report)
-        elif format == "markdown":
-            content = TestReporter._generate_markdown_report(report)
-        elif format == "junit":
-            content = TestReporter._generate_junit_report(report)
-        else:
-            raise ValueError(f"Unknown report format: {format}")
-            
-        # Write to file if specified
-        if output:
-            output = Path(output)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            with open(output, 'w') as f:
-                f.write(content)
-            logger.info(f"Report written to {output}")
-            
-        return content
+        if format != "console":
+            raise ValueError(f"Only 'console' format is supported, got: {format}")
+
+        return TestReporter._generate_console_report(report)
     
     @staticmethod
     def _generate_console_report(report: TestReport) -> str:

@@ -67,62 +67,70 @@ class GoogleTestStyleFormatter(logging.Formatter):
         # Get test context
         test_name = getattr(record, 'test_name', '')
         step_desc = getattr(record, 'step_desc', '')
-        
+
         # Format based on log level and context
         if record.levelname == 'INFO':
-            if 'RUN' in record.getMessage():
+            msg = record.getMessage()
+            if '[ RUN      ]' in msg:
                 # Test case starting
-                return self._format_test_run(test_name)
-            elif 'OK' in record.getMessage() or 'PASSED' in record.getMessage():
+                return self._format_test_run_line(msg)
+            elif '[       OK ]' in msg:
                 # Test case passed
-                return self._format_test_ok(test_name, record)
-            elif 'FAILED' in record.getMessage():
+                return self._format_test_ok_line(msg)
+            elif '[  FAILED  ]' in msg:
                 # Test case failed
-                return self._format_test_fail(test_name, record)
+                return self._format_test_fail_line(msg)
             else:
-                # Regular info
+                # Regular info - color it green
                 return self._format_info(record)
-                
+
         elif record.levelname == 'DEBUG':
             # Step-level details
             return self._format_debug(record, test_name, step_desc)
-            
+
         elif record.levelname == 'ERROR':
             return self._format_error(record)
-            
+
+        elif record.levelname == 'WARNING':
+            return self._format_warning(record)
+
         else:
             return super().format(record)
             
-    def _format_test_run(self, test_name):
+    def _format_test_run_line(self, msg):
+        """Color the [ RUN ] line green"""
         if self.use_color:
-            return f"[ {self.GREEN}RUN{self.RESET}      ] {test_name}"
-        return f"[ RUN      ] {test_name}"
-        
-    def _format_test_ok(self, test_name, record):
-        # Extract duration if available
-        duration = getattr(record, 'duration_ms', 0)
+            return msg.replace('[ RUN      ]', f'[ {self.GREEN}RUN{self.RESET}      ]')
+        return msg
+
+    def _format_test_ok_line(self, msg):
+        """Color the [  OK ] line green"""
         if self.use_color:
-            return f"[       {self.GREEN}OK{self.RESET} ] {test_name} ({duration:.0f} ms)"
-        return f"[       OK ] {test_name} ({duration} ms)"
-        
-    def _format_test_fail(self, test_name, record):
-        duration = getattr(record, 'duration_ms', 0)
+            return msg.replace('[       OK ]', f'[       {self.GREEN}OK{self.RESET} ]')
+        return msg
+
+    def _format_test_fail_line(self, msg):
+        """Color the [ FAILED ] line red"""
         if self.use_color:
-            return f"[  {self.RED}FAILED{self.RESET}  ] {test_name} ({duration:.0f} ms)"
-        return f"[  FAILED  ] {test_name} ({duration} ms)"
+            return msg.replace('[  FAILED  ]', f'[  {self.RED}FAILED{self.RESET}  ]')
+        return msg
         
     def _format_info(self, record):
+        """Format INFO level logs - add timestamp and color green"""
         msg = record.getMessage()
-        # Special formatting for container logs
+        timestamp = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S')
+        timestamp_ms = f"{timestamp},{int(record.msecs):03d}"
+
+        # Special formatting for container logs - keep in cyan
         if "[CONTAINER:" in msg:
-            # Extract container log content
             if self.use_color:
-                return f"  {self.CYAN}{msg}{self.RESET}"
-            return f"  {msg}"
+                return f"{timestamp_ms} - {record.name} - {self.CYAN}INFO{self.RESET} - {msg}"
+            return f"{timestamp_ms} - {record.name} - INFO - {msg}"
         else:
+            # Regular INFO logs in green
             if self.use_color:
-                return f"[{self.CYAN}----------{self.RESET}] {msg}"
-            return f"[----------] {msg}"
+                return f"{timestamp_ms} - {record.name} - {self.GREEN}INFO{self.RESET} - {msg}"
+            return f"{timestamp_ms} - {record.name} - INFO - {msg}"
         
     def _format_debug(self, record, test_name, step_desc):
         # Debug messages are indented and show step context
@@ -132,9 +140,22 @@ class GoogleTestStyleFormatter(logging.Formatter):
         return f"{prefix}{record.getMessage()}"
         
     def _format_error(self, record):
+        """Format ERROR level logs - color red"""
+        msg = record.getMessage()
+        timestamp = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S')
+        timestamp_ms = f"{timestamp},{int(record.msecs):03d}"
         if self.use_color:
-            return f"[{self.RED}ERROR{self.RESET}] {record.getMessage()}"
-        return f"[ERROR] {record.getMessage()}"
+            return f"{timestamp_ms} - {record.name} - {self.RED}ERROR{self.RESET} - {msg}"
+        return f"{timestamp_ms} - {record.name} - ERROR - {msg}"
+
+    def _format_warning(self, record):
+        """Format WARNING level logs - color yellow"""
+        msg = record.getMessage()
+        timestamp = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S')
+        timestamp_ms = f"{timestamp},{int(record.msecs):03d}"
+        if self.use_color:
+            return f"{timestamp_ms} - {record.name} - {self.YELLOW}WARNING{self.RESET} - {msg}"
+        return f"{timestamp_ms} - {record.name} - WARNING - {msg}"
 
 
 class TestLogManager:

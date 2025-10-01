@@ -12,6 +12,7 @@ from pathlib import Path
 from .parser import SpecParser, TestParser
 from .runner import TestRunner
 from .reporter import TestReporter
+from .log_formatter import GoogleTestStyleFormatter
 
 
 def main():
@@ -59,15 +60,9 @@ def main():
     
     parser.add_argument(
         "-f", "--format",
-        choices=["console", "json", "markdown", "junit"],
+        choices=["console"],
         default="console",
         help="Report format (default: %(default)s)"
-    )
-    
-    parser.add_argument(
-        "-o", "--output",
-        type=Path,
-        help="Output file for report"
     )
     
     parser.add_argument(
@@ -118,13 +113,22 @@ def main():
     )
     
     args = parser.parse_args()
-    
-    # Configure logging
+
+    # Configure logging with color support
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+
+    # Setup root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    # Remove any existing handlers
+    root_logger.handlers.clear()
+
+    # Add console handler with color formatter
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(GoogleTestStyleFormatter(use_color=True))
+    root_logger.addHandler(console_handler)
     
     # Load test suite
     try:
@@ -209,15 +213,10 @@ def main():
         report = asyncio.run(run_tests())
         
         # Generate report
-        report_content = TestReporter.generate_report(
-            report,
-            format=args.format,
-            output=args.output
-        )
-        
-        # Print to console if no output file or console format
-        if not args.output or args.format == "console":
-            print(report_content)
+        report_content = TestReporter.generate_report(report, format=args.format)
+
+        # Print to console
+        print(report_content)
             
         # Exit with appropriate code
         summary = report.get_summary()
