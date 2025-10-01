@@ -1,6 +1,5 @@
 # Test results
 test-results/
-*.json
 
 # Python
 __pycache__/

@@ -1,0 +1,82 @@
+{
+  "Vehicle": {
+    "type": "branch",
+    "description": "Vehicle data",
+    "children": {
+      "Speed": {
+        "type": "sensor",
+        "datatype": "float",
+        "unit": "km/h",
+        "min": 0,
+        "max": 300,
+        "description": "Vehicle speed"
+      },
+      "Acceleration": {
+        "Lateral": {
+          "type": "sensor",
+          "datatype": "float",
+          "unit": "m/s^2",
+          "min": -50,
+          "max": 50,
+          "description": "Lateral acceleration"
+        },
+        "Longitudinal": {
+          "type": "sensor",
+          "datatype": "float",
+          "unit": "m/s^2",
+          "min": -20,
+          "max": 20,
+          "description": "Longitudinal acceleration"
+        }
+      },
+      "Powertrain": {
+        "type": "branch",
+        "description": "Powertrain data",
+        "children": {
+          "Engine": {
+            "type": "branch",
+            "children": {
+              "RPM": {
+                "type": "sensor",
+                "datatype": "uint32",
+                "unit": "rpm",
+                "min": 0,
+                "max": 10000,
+                "description": "Engine rotational speed"
+              },
+              "Temperature": {
+                "type": "sensor",
+                "datatype": "float",
+                "unit": "celsius",
+                "min": -50,
+                "max": 200,
+                "description": "Engine temperature"
+              }
+            }
+          },
+          "Battery": {
+            "type": "branch",
+            "children": {
+              "StateOfCharge": {
+                "type": "sensor",
+                "datatype": "float",
+                "unit": "percent",
+                "min": 0,
+                "max": 100,
+                "description": "Battery state of charge"
+              },
+              "Voltage": {
+                "type": "sensor",
+                "datatype": "float",
+                "unit": "V",
+                "min": 0,
+                "max": 800,
+                "description": "Battery voltage"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
