@@ -1,0 +1,19 @@
+FROM alpine:3.18
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    libstdc++ \
+    libgcc \
+    glog \
+    yaml-cpp
+
+# Copy the compiled climate control binary
+COPY climate_control /app/climate_control
+
+# Make it executable
+RUN chmod +x /app/climate_control
+
+WORKDIR /app
+
+# Run the climate control application
+CMD ["/app/climate_control"]

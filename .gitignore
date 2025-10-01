@@ -16,3 +16,7 @@ venv/
 *.tmp
 *.log
 temp/
+build
+cmake-build-debug
+.idea
+

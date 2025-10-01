@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # KUKSA Databroker
+  databroker:
+    image: ghcr.io/eclipse/kuksa.val/databroker:0.4.0
+    ports:
+      - "55556:55555"
+    environment:
+      - KUKSA_DATA_BROKER_METADATA_FILE=/data/vss_release_4.0.json
+    volumes:
+      - ../test-data/vss_full.json:/data/vss_release_4.0.json:ro
+    command: --insecure
+
+  # Test Framework v4
+  test-runner:
+    build: .
+    depends_on:
+      - databroker
+    environment:
+      - KUKSA_URL=databroker:55555
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./examples:/app/examples
+      - ./results:/app/results
+    working_dir: /app

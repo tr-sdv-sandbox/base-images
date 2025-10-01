@@ -18,31 +18,31 @@ check_base_images
 echo ""
 echo "Building Python speed monitor..."
 cd examples/python-speed-monitor
-docker build -t sdv-speed-monitor:latest .
+docker build -t sdv-python-speed-monitor:latest .
 cd ../..
 
 # Build C++ engine monitor (Debian)
 echo ""
 echo "Building C++ engine monitor (Debian)..."
 cd examples/cpp-engine-monitor
-docker build -t sdv-engine-monitor:latest .
+docker build -t sdv-cpp-engine-monitor:latest .
 cd ../..
 
 # Build C++ engine monitor (Alpine)
 echo ""
 echo "Building C++ engine monitor (Alpine)..."
 cd examples/cpp-engine-monitor
-docker build -f Dockerfile.alpine -t sdv-engine-monitor:alpine .
+docker build -f Dockerfile.alpine -t sdv-cpp-engine-monitor:alpine .
 cd ../..
 
 echo ""
 echo "Example images built successfully!"
 echo ""
 echo "Example images:"
-docker images | grep -E "(sdv-(speed|engine)-monitor|REPOSITORY)" | head -5
+docker images | grep -E "(sdv-(cpp-engine|python-speed)-monitor|REPOSITORY)" | head -5
 
 echo ""
 echo "Image sizes comparison:"
-echo "Debian-based C++ image: $(docker images sdv-engine-monitor:latest --format "{{.Size}}")"
-echo "Alpine-based C++ image: $(docker images sdv-engine-monitor:alpine --format "{{.Size}}")"
-echo "Python image: $(docker images sdv-speed-monitor:latest --format "{{.Size}}")"
+echo "Debian-based C++ image: $(docker images sdv-cpp-engine-monitor:latest --format "{{.Size}}")"
+echo "Alpine-based C++ image: $(docker images sdv-cpp-engine-monitor:alpine --format "{{.Size}}")"
+echo "Python image: $(docker images sdv-python-speed-monitor:latest --format "{{.Size}}")"

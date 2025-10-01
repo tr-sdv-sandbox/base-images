@@ -1,0 +1,170 @@
+---
+# Test specification for Climate Control State Machine
+# This spec defines how VSS signals map to state machine triggers
+
+test_suite:
+  name: "Climate Control System Test"
+  description: "Verify climate control state machine behavior based on VSS signals"
+  
+vss_mappings:
+  # Map VSS signals to triggers
+  - vss_path: "Vehicle.Powertrain.ElectricMotor.Power"
+    trigger_rules:
+      - condition: "value > 0"
+        trigger: "power_on"
+        context:
+          engine_running: true
+          battery_level: "${Vehicle.Powertrain.TractionBattery.StateOfCharge.Current}"
+      - condition: "value == 0"
+        trigger: "power_off"
+        
+  - vss_path: "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature"
+    trigger_rules:
+      - condition: "abs(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) < 0.5"
+        trigger: "temperature_reached"
+      - condition: "(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) > 1.0"
+        trigger: "start_cooling"
+        context:
+          temperature_difference: "${Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature}"
+      - condition: "(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) < -1.0"
+        trigger: "start_heating"
+        context:
+          temperature_difference: "${Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature}"
+          
+  - vss_path: "Vehicle.Body.Windshield.Front.WasherFluid.LevelLow"
+    trigger_rules:
+      - condition: "Vehicle.ADAS.CruiseControl.IsActive && value == true"
+        trigger: "defrost_requested"
+      - condition: "value == false"
+        trigger: "defrost_cancelled"
+        
+  - vss_path: "Vehicle.Powertrain.Range"
+    trigger_rules:
+      - condition: "value < 50"  # Less than 50km range
+        trigger: "eco_mode_requested"
+      - condition: "value > 100"  # More than 100km range
+        trigger: "eco_mode_cancelled"
+
+test_cases:
+  - name: "Normal cooling operation"
+    description: "Verify system enters cooling mode when cabin is too warm"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 15000  # 15kW
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 75.0
+          "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature": 28.0
+          "Vehicle.Cabin.Infotainment.HMI.TargetTemperature": 22.0
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: OFF -> IDLE | trigger=power_on"
+          log_contains: "[SM:ClimateControl] STATE: current=IDLE"
+      - wait: "100ms" 
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: IDLE -> COOLING | trigger=start_cooling"
+          log_contains: "[SM:ClimateControl] STATE: current=COOLING"
+          log_contains: "Cooling mode activated"
+      - set_vss:
+          "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature": 22.3  # Close to target
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: COOLING -> IDLE | trigger=temperature_reached"
+          log_contains: "Cooling mode deactivated"
+          
+  - name: "Low battery prevents start"
+    description: "Verify system goes to error state when battery is too low"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 0  # Engine off
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 15.0  # Low battery
+      - trigger: "power_on"
+        context:
+          engine_running: false
+          battery_level: 15.0
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: OFF -> ERROR | trigger=power_on"
+          log_contains: "[SM:ClimateControl] STATE: current=ERROR"
+          log_contains: "Climate control error - insufficient power"
+          
+  - name: "Defrost overrides other modes"
+    description: "Verify defrost mode takes priority"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 15000
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 80.0
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] STATE: current=IDLE"
+      - set_vss:
+          "Vehicle.Powertrain.Range": 45  # Low range triggers eco mode
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: IDLE -> ECO_MODE | trigger=eco_mode_requested"
+      - set_vss:
+          "Vehicle.Body.Windshield.Front.WasherFluid.LevelLow": true
+          "Vehicle.ADAS.CruiseControl.IsActive": true
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: ECO_MODE -> DEFROST | trigger=defrost_requested"
+          log_contains: "Defrost mode activated - max heat and fan"
+          
+  - name: "State machine query"
+    description: "Verify we can query current state from logs"
+    steps:
+      - power_on_climate_control  # Helper function
+      - query_state: "ClimateControl"
+      - expect:
+          state_is: "IDLE"
+      - trigger_eco_mode  # Helper function
+      - query_state: "ClimateControl"
+      - expect:
+          state_is: "ECO_MODE"
+          
+  - name: "Invalid transitions are blocked"
+    description: "Verify invalid state transitions are prevented"
+    initial_state: "OFF"
+    steps:
+      # Try to go directly to cooling without power on
+      - trigger: "start_cooling"
+        context:
+          temperature_difference: 5.0
+      - expect:
+          log_with_verbosity:
+            level: 1
+            contains: "[SM:ClimateControl] IGNORED: trigger='start_cooling' state=OFF reason=no_transition"
+          state_is: "OFF"  # Should remain OFF
+          
+validation_rules:
+  - name: "No invalid state sequences"
+    description: "Certain state transitions should never occur"
+    forbidden_sequences:
+      - "TRANSITION: OFF -> COOLING"    # Must go through IDLE
+      - "TRANSITION: OFF -> HEATING"    # Must go through IDLE  
+      - "TRANSITION: ERROR -> IDLE"     # Must go to OFF first
+      - "TRANSITION: DEFROST -> COOLING"  # Must go through IDLE
+      
+  - name: "State duration limits"
+    description: "Ensure states don't persist too long"
+    max_duration:
+      ERROR: "30s"  # Error state should be resolved quickly
+      DEFROST: "300s"  # Defrost should not run forever
+      
+# Helper functions that test framework would implement
+helpers:
+  power_on_climate_control:
+    - set_vss:
+        "Vehicle.Powertrain.ElectricMotor.Power": 10000
+        "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 80.0
+    - wait: "200ms"
+    
+  trigger_eco_mode:
+    - set_vss:
+        "Vehicle.Powertrain.Range": 30  # Low range
+    - wait: "100ms"
+    
+  query_state:
+    # Parse latest STATE: log entry for given state machine
+    - parse_log: "\\[SM:${sm_name}\\] STATE: current=(\\w+)"
+    - return: "$1"
