@@ -150,6 +150,7 @@ class TestStepType(Enum):
     INJECT = "inject"  # Set signal values
     EXPECT = "expect"  # Verify signal values
     EXPECT_STATE = "expect_state"  # Verify state machine state
+    EXPECT_TRANSITION = "expect_transition"  # Verify state machine transition
     WAIT = "wait"  # Time delay
     LOG = "log"  # Log message
     EXPECT_LOG = "expect_log"  # Check container logs
@@ -177,11 +178,36 @@ class TestCase:
     tags: List[str] = field(default_factory=list)
 
 
+class FixtureType(Enum):
+    """Types of test fixtures"""
+    ACTUATOR_MIRROR = "actuator_mirror"  # TARGET → ACTUAL echo
+    SENSOR_GENERATOR = "sensor_generator"  # Generate sensor values
+    CUSTOM = "custom"  # Custom Python fixture
+
+
+@dataclass
+class Fixture:
+    """Hardware/environment simulation fixture"""
+    name: str
+    type: FixtureType
+    config: Dict[str, Any] = field(default_factory=dict)
+    # For actuator_mirror:
+    #   - target_signal: str
+    #   - actual_signal: str
+    #   - delay: float (seconds)
+    #   - transform: Optional[str] (e.g., "clamp(0, 100)")
+    # For sensor_generator:
+    #   - signal: str
+    #   - pattern: str (e.g., "sine", "random", "constant")
+    #   - params: Dict[str, Any]
+
+
 @dataclass
 class TestSuite:
     """Collection of test cases"""
     name: str
     system_spec: Optional[str] = None  # Path to VFF spec
+    fixtures: List[Fixture] = field(default_factory=list)  # Hardware simulation
     setup: List[TestStep] = field(default_factory=list)
     test_cases: List[TestCase] = field(default_factory=list)
     teardown: List[TestStep] = field(default_factory=list)

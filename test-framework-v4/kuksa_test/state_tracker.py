@@ -191,7 +191,7 @@ class StateTracker:
                 return [e for e in self._blocked_events if e.state_machine == state_machine]
             return self._blocked_events.copy()
     
-    def wait_for_state(self, state_machine: str, expected_state: str, 
+    def wait_for_state(self, state_machine: str, expected_state: str,
                       timeout: float = 5.0) -> bool:
         """
         Wait for a state machine to reach a specific state.
@@ -199,14 +199,34 @@ class StateTracker:
         """
         import time
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             if self.get_current_state(state_machine) == expected_state:
                 return True
             time.sleep(0.1)
-            
+
         return False
-    
+
+    def wait_for_transition(self, state_machine: str, from_state: str, to_state: str,
+                           trigger: Optional[str] = None, timeout: float = 5.0) -> bool:
+        """
+        Wait for a specific transition to occur.
+        Returns True if transition is found (including past transitions) within timeout.
+        """
+        import time
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            transitions = self.get_transitions(state_machine)
+            # Check all transitions (including ones that already occurred)
+            for t in transitions:
+                if t.from_state == from_state and t.to_state == to_state:
+                    if trigger is None or t.trigger == trigger:
+                        return True
+            time.sleep(0.1)
+
+        return False
+
     def verify_transition_sequence(self, state_machine: str, 
                                  expected_sequence: List[Tuple[str, str]]) -> bool:
         """

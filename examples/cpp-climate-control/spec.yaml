@@ -1,0 +1,60 @@
+---
+# Specification for Climate Control State Machine
+# This spec defines how VSS signals map to state machine triggers
+
+name: "Climate Control System"
+description: "Climate control state machine specification based on VSS signals"
+
+vss_mappings:
+  # Map VSS signals to triggers
+  - vss_path: "Vehicle.Powertrain.ElectricMotor.Power"
+    trigger_rules:
+      - condition: "value > 0"
+        trigger: "power_on"
+        context:
+          engine_running: true
+          battery_level: "${Vehicle.Powertrain.TractionBattery.StateOfCharge.Current}"
+      - condition: "value == 0"
+        trigger: "power_off"
+        
+  - vss_path: "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature"
+    trigger_rules:
+      - condition: "abs(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) < 0.5"
+        trigger: "temperature_reached"
+      - condition: "(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) > 1.0"
+        trigger: "start_cooling"
+        context:
+          temperature_difference: "${Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature}"
+      - condition: "(Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature) < -1.0"
+        trigger: "start_heating"
+        context:
+          temperature_difference: "${Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature - Vehicle.Cabin.Infotainment.HMI.TargetTemperature}"
+          
+  - vss_path: "Vehicle.Body.Windshield.Front.WasherFluid.LevelLow"
+    trigger_rules:
+      - condition: "Vehicle.ADAS.CruiseControl.IsActive && value == true"
+        trigger: "defrost_requested"
+      - condition: "value == false"
+        trigger: "defrost_cancelled"
+        
+  - vss_path: "Vehicle.Powertrain.Range"
+    trigger_rules:
+      - condition: "value < 50"  # Less than 50km range
+        trigger: "eco_mode_requested"
+      - condition: "value > 100"  # More than 100km range
+        trigger: "eco_mode_cancelled"
+
+validation_rules:
+  - name: "No invalid state sequences"
+    description: "Certain state transitions should never occur"
+    forbidden_sequences:
+      - "TRANSITION: OFF -> COOLING"    # Must go through IDLE
+      - "TRANSITION: OFF -> HEATING"    # Must go through IDLE  
+      - "TRANSITION: ERROR -> IDLE"     # Must go to OFF first
+      - "TRANSITION: DEFROST -> COOLING"  # Must go through IDLE
+      
+  - name: "State duration limits"
+    description: "Ensure states don't persist too long"
+    max_duration:
+      ERROR: "30s"  # Error state should be resolved quickly
+      DEFROST: "300s"  # Defrost should not run forever

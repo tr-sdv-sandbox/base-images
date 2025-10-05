@@ -1,0 +1,560 @@
+/**
+ * @file vss_client.cpp
+ * @brief VSS Client implementation using KUKSA gRPC API
+ */
+
+#include <sdv/vss/client.hpp>
+#include <grpcpp/grpcpp.h>
+#include <glog/logging.h>
+#include <thread>
+#include <atomic>
+
+// Include KUKSA protobuf definitions
+#include "kuksa/val/v2/types.pb.h"
+#include "kuksa/val/v2/val.pb.h"
+#include "kuksa/val/v2/val.grpc.pb.h"
+
+using grpc::Channel;
+using grpc::ClientContext;
+using grpc::Status;
+using kuksa::val::v1::VAL;
+using kuksa::val::v1::GetRequest;
+using kuksa::val::v1::GetResponse;
+using kuksa::val::v1::SetRequest;
+using kuksa::val::v1::SetResponse;
+using kuksa::val::v1::SubscribeRequest;
+using kuksa::val::v1::SubscribeResponse;
+using kuksa::val::v1::Datapoint;
+using kuksa::val::v1::Field;
+
+namespace sdv::vss {
+
+// ============================================================================
+// Internal implementation
+// ============================================================================
+
+class VSSClient::Impl {
+public:
+    explicit Impl(const std::string& address)
+        : address_(address), running_(false) {}
+
+    ~Impl() {
+        disconnect();
+    }
+
+    bool connect() {
+        if (connected_) return true;
+
+        LOG(INFO) << "Connecting to KUKSA databroker at: " << address_;
+
+        // Configure channel with keep-alive to prevent DNS re-resolution issues
+        grpc::ChannelArguments args;
+        args.SetInt(GRPC_ARG_KEEPALIVE_TIME_MS, 10000);
+        args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 5000);
+        args.SetInt(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);
+        args.SetInt(GRPC_ARG_HTTP2_MAX_PINGS_WITHOUT_DATA, 0);
+        // Enable retries
+        args.SetInt(GRPC_ARG_ENABLE_RETRIES, 1);
+
+        channel_ = grpc::CreateCustomChannel(address_, grpc::InsecureChannelCredentials(), args);
+        stub_ = VAL::NewStub(channel_);
+
+        connected_ = true;
+        LOG(INFO) << "Connected to KUKSA databroker";
+        return true;
+    }
+
+    void disconnect() {
+        if (!connected_) return;
+
+        running_ = false;
+
+        // Stop subscription thread
+        if (subscribe_thread_ && subscribe_thread_->joinable()) {
+            subscribe_thread_->join();
+        }
+
+        connected_ = false;
+        LOG(INFO) << "Disconnected from KUKSA databroker";
+    }
+
+    bool is_connected() const {
+        return connected_;
+    }
+
+    // Subscribe to a path with specific field (ACTUATOR_TARGET, ACTUATOR_ACTUAL, or VALUE)
+    void subscribe(const std::string& path, Field field, std::function<void(const Datapoint&)> callback) {
+        std::string field_name = (field == Field::FIELD_ACTUATOR_TARGET) ? "TARGET" :
+                                 (field == Field::FIELD_VALUE) ? "VALUE" : "UNKNOWN";
+        LOG(INFO) << "Registering subscription to " << path << " [" << field_name << "]";
+
+        std::lock_guard<std::mutex> lock(subscriptions_mutex_);
+        std::string key = path + ":" + std::to_string(static_cast<int>(field));
+        subscriptions_[key] = callback;
+    }
+
+    // Start subscription processing
+    void start_subscriptions() {
+        std::lock_guard<std::mutex> lock(subscriptions_mutex_);
+        if (!connected_) {
+            LOG(WARNING) << "Cannot start subscriptions - not connected";
+            return;
+        }
+        if (running_) {
+            LOG(INFO) << "Subscriptions already running";
+            return;
+        }
+
+        LOG(INFO) << "Starting subscriptions for " << subscriptions_.size() << " signal(s)";
+        start_subscription_thread();
+
+        // Read initial values for all subscriptions
+        for (const auto& [key, callback] : subscriptions_) {
+            size_t colon_pos = key.find(':');
+            std::string path = key.substr(0, colon_pos);
+            int field_int = std::stoi(key.substr(colon_pos + 1));
+            Field field = static_cast<Field>(field_int);
+
+            std::string field_name = (field == Field::FIELD_ACTUATOR_TARGET) ? "TARGET" : "VALUE";
+
+            auto initial_value = get(path, field);
+            if (initial_value.has_value()) {
+                LOG(INFO) << "Got initial value for " << path << " [" << field_name << "]";
+                callback(initial_value.value());
+            }
+        }
+    }
+
+    // Get current value
+    std::optional<Datapoint> get(const std::string& path, Field field) {
+        if (!connected_) return std::nullopt;
+
+        GetRequest request;
+        auto* entry = request.add_entries();
+        entry->set_path(path);
+        entry->add_fields(field);
+
+        ClientContext context;
+        GetResponse response;
+        Status status = stub_->Get(&context, request, &response);
+
+        if (!status.ok()) {
+            LOG(WARNING) << "Failed to get " << path << ": " << status.error_message();
+            return std::nullopt;
+        }
+
+        if (response.entries().empty()) {
+            return std::nullopt;
+        }
+
+        // Return the appropriate field based on what was requested
+        const auto& resp_entry = response.entries(0);
+        if (field == Field::FIELD_ACTUATOR_TARGET && resp_entry.has_actuator_target()) {
+            return resp_entry.actuator_target();
+        } else if (resp_entry.has_value()) {
+            return resp_entry.value();
+        }
+
+        return std::nullopt;
+    }
+
+    // Set value
+    bool set(const std::string& path, Field field, const Datapoint& value) {
+        if (!connected_) return false;
+
+        std::string field_name = (field == Field::FIELD_ACTUATOR_TARGET) ? "TARGET" : "VALUE";
+        LOG(INFO) << "Setting " << path << " [" << field_name << "]";
+
+        SetRequest request;
+        auto* update = request.add_updates();
+        auto* entry = update->mutable_entry();
+        entry->set_path(path);
+
+        // Set the appropriate field based on what we're setting
+        if (field == Field::FIELD_ACTUATOR_TARGET) {
+            *entry->mutable_actuator_target() = value;
+            // IMPORTANT: Must specify which field we're setting
+            update->add_fields(Field::FIELD_ACTUATOR_TARGET);
+        } else {
+            *entry->mutable_value() = value;
+            update->add_fields(Field::FIELD_VALUE);
+        }
+
+        ClientContext context;
+        SetResponse response;
+        Status status = stub_->Set(&context, request, &response);
+
+        if (!status.ok()) {
+            LOG(ERROR) << "Failed to set " << path << ": " << status.error_message();
+            return false;
+        }
+
+        // Log response details to debug subscription issues
+        if (response.errors_size() > 0) {
+            LOG(ERROR) << "KUKSA returned errors for " << path << ":";
+            for (const auto& error : response.errors()) {
+                LOG(ERROR) << "  Error code: " << error.error().code()
+                          << ", message: " << error.error().message();
+            }
+            return false;
+        }
+
+        LOG(INFO) << "Successfully set " << path << " [" << field_name << "]";
+        return true;
+    }
+
+private:
+    std::string build_path(const std::string& base_path, Field field) {
+        // All fields accessed via base path in KUKSA 0.4.1
+        return base_path;
+    }
+
+    void start_subscription_thread() {
+        running_ = true;
+        LOG(INFO) << "Starting subscription thread";
+        subscribe_thread_ = std::make_unique<std::thread>([this]() {
+            subscribe_loop();
+        });
+    }
+
+    void subscribe_loop() {
+        while (running_) {
+            try {
+                SubscribeRequest request;
+
+                // Add all subscriptions
+                {
+                    std::lock_guard<std::mutex> lock(subscriptions_mutex_);
+                    for (const auto& [key, callback] : subscriptions_) {
+                        auto* entry = request.add_entries();
+
+                        // Parse key to get path and field
+                        size_t colon_pos = key.find(':');
+                        std::string path = key.substr(0, colon_pos);
+                        int field_int = std::stoi(key.substr(colon_pos + 1));
+                        Field field = static_cast<Field>(field_int);
+
+                        entry->set_path(path);
+                        entry->add_fields(field);
+                        entry->add_fields(Field::FIELD_VALUE);
+                    }
+                }
+
+                if (request.entries().empty()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+
+                // Start subscription
+                LOG(INFO) << "Starting gRPC subscription stream for " << request.entries_size() << " entries";
+                ClientContext context;
+                auto reader = stub_->Subscribe(&context, request);
+
+                SubscribeResponse response;
+                while (running_ && reader->Read(&response)) {
+                    LOG(INFO) << "Received " << response.updates_size() << " update(s) from subscription stream";
+                    for (const auto& update : response.updates()) {
+                        handle_update(update);
+                    }
+                }
+
+                if (!running_) break;
+
+                // Check why subscription ended
+                Status status = reader->Finish();
+                if (!status.ok()) {
+                    LOG(ERROR) << "Subscription failed: " << status.error_code()
+                              << " - " << status.error_message();
+                } else {
+                    LOG(WARNING) << "Subscription connection lost, retrying...";
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            } catch (const std::exception& e) {
+                LOG(ERROR) << "Subscription error: " << e.what();
+                if (running_) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
+            }
+        }
+    }
+
+    void handle_update(const kuksa::val::v1::EntryUpdate& update) {
+        std::lock_guard<std::mutex> lock(subscriptions_mutex_);
+
+        const std::string& path = update.entry().path();
+
+        // Check which field was updated
+        if (update.entry().has_actuator_target()) {
+            std::string key = path + ":" + std::to_string(static_cast<int>(Field::FIELD_ACTUATOR_TARGET));
+            auto it = subscriptions_.find(key);
+            if (it != subscriptions_.end()) {
+                LOG(INFO) << "Received update: " << path << " [TARGET]";
+                it->second(update.entry().actuator_target());
+            }
+        }
+
+        if (update.entry().has_value()) {
+            std::string key = path + ":" + std::to_string(static_cast<int>(Field::FIELD_VALUE));
+            auto it = subscriptions_.find(key);
+            if (it != subscriptions_.end()) {
+                LOG(INFO) << "Received update: " << path << " [VALUE]";
+                it->second(update.entry().value());
+            }
+        }
+    }
+
+    std::string address_;
+    std::shared_ptr<Channel> channel_;
+    std::unique_ptr<VAL::Stub> stub_;
+    bool connected_{false};
+    std::atomic<bool> running_{false};
+    std::unique_ptr<std::thread> subscribe_thread_;
+
+    std::mutex subscriptions_mutex_;
+    std::map<std::string, std::function<void(const Datapoint&)>> subscriptions_;
+};
+
+// ============================================================================
+// Public API implementation
+// ============================================================================
+
+VSSClient::VSSClient(const std::string& databroker_address)
+    : impl_(std::make_unique<Impl>(databroker_address)) {}
+
+VSSClient::~VSSClient() = default;
+
+bool VSSClient::connect() {
+    return impl_->connect();
+}
+
+void VSSClient::disconnect() {
+    impl_->disconnect();
+}
+
+bool VSSClient::is_connected() const {
+    return impl_->is_connected();
+}
+
+void VSSClient::start_subscriptions() {
+    impl_->start_subscriptions();
+}
+
+// ============================================================================
+// Template specializations for common types
+// ============================================================================
+
+// Sensor specializations
+template<>
+void VSSClient::subscribe<bool>(const Sensor<bool>& sensor, typename Sensor<bool>::Callback callback) {
+    impl_->subscribe(sensor.path(), Field::FIELD_VALUE, [callback](const Datapoint& dp) {
+        if (dp.has_bool_()) {
+            callback(dp.bool_());
+        }
+    });
+}
+
+template<>
+void VSSClient::subscribe<int32_t>(const Sensor<int32_t>& sensor, typename Sensor<int32_t>::Callback callback) {
+    impl_->subscribe(sensor.path(), Field::FIELD_VALUE, [callback](const Datapoint& dp) {
+        if (dp.has_int32()) {
+            callback(dp.int32());
+        }
+    });
+}
+
+template<>
+void VSSClient::subscribe<float>(const Sensor<float>& sensor, typename Sensor<float>::Callback callback) {
+    impl_->subscribe(sensor.path(), Field::FIELD_VALUE, [callback](const Datapoint& dp) {
+        if (dp.has_float_()) {
+            callback(dp.float_());
+        } else if (dp.has_double_()) {
+            callback(static_cast<float>(dp.double_()));
+        }
+    });
+}
+
+template<>
+void VSSClient::on_target<bool>(const Actuator<bool>& actuator, typename Actuator<bool>::TargetCallback callback) {
+    impl_->subscribe(actuator.path(), Field::FIELD_ACTUATOR_TARGET, [callback](const Datapoint& dp) {
+        if (dp.has_bool_()) {
+            callback(dp.bool_());
+        }
+    });
+}
+
+template<>
+void VSSClient::on_target<int32_t>(const Actuator<int32_t>& actuator, typename Actuator<int32_t>::TargetCallback callback) {
+    impl_->subscribe(actuator.path(), Field::FIELD_ACTUATOR_TARGET, [callback](const Datapoint& dp) {
+        if (dp.has_int32()) {
+            callback(dp.int32());
+        }
+    });
+}
+
+template<>
+void VSSClient::on_target<float>(const Actuator<float>& actuator, typename Actuator<float>::TargetCallback callback) {
+    impl_->subscribe(actuator.path(), Field::FIELD_ACTUATOR_TARGET, [callback](const Datapoint& dp) {
+        if (dp.has_float_()) {
+            callback(dp.float_());
+        }
+    });
+}
+
+template<>
+void VSSClient::set_target<bool>(const Actuator<bool>& actuator, bool value) {
+    Datapoint dp;
+    dp.set_bool_(value);
+    impl_->set(actuator.path(), Field::FIELD_ACTUATOR_TARGET, dp);
+}
+
+template<>
+void VSSClient::set_target<int32_t>(const Actuator<int32_t>& actuator, int32_t value) {
+    Datapoint dp;
+    dp.set_int32(value);
+    impl_->set(actuator.path(), Field::FIELD_ACTUATOR_TARGET, dp);
+}
+
+template<>
+void VSSClient::set_target<float>(const Actuator<float>& actuator, float value) {
+    Datapoint dp;
+    dp.set_float_(value);
+    impl_->set(actuator.path(), Field::FIELD_ACTUATOR_TARGET, dp);
+}
+
+// set_actual implementations
+template<>
+void VSSClient::set_actual<bool>(const Actuator<bool>& actuator, bool value) {
+    Datapoint dp;
+    dp.set_bool_(value);
+    impl_->set(actuator.path(), Field::FIELD_VALUE, dp);
+}
+
+template<>
+void VSSClient::set_actual<int32_t>(const Actuator<int32_t>& actuator, int32_t value) {
+    Datapoint dp;
+    dp.set_int32(value);
+    impl_->set(actuator.path(), Field::FIELD_VALUE, dp);
+}
+
+template<>
+void VSSClient::set_actual<float>(const Actuator<float>& actuator, float value) {
+    Datapoint dp;
+    dp.set_float_(value);
+    impl_->set(actuator.path(), Field::FIELD_VALUE, dp);
+}
+
+template<>
+void VSSClient::on_actual<bool>(const Actuator<bool>& actuator, typename Actuator<bool>::ActualCallback callback) {
+    impl_->subscribe(actuator.path(), Field::FIELD_VALUE, [callback](const Datapoint& dp) {
+        if (dp.has_bool_()) {
+            callback(dp.bool_());
+        }
+    });
+}
+
+template<>
+void VSSClient::on_actual<int32_t>(const Actuator<int32_t>& actuator, typename Actuator<int32_t>::ActualCallback callback) {
+    impl_->subscribe(actuator.path(), Field::FIELD_VALUE, [callback](const Datapoint& dp) {
+        if (dp.has_int32()) {
+            callback(dp.int32());
+        }
+    });
+}
+
+// Sensor get() specializations
+template<>
+std::optional<bool> VSSClient::get<bool>(const Sensor<bool>& sensor) {
+    auto dp = impl_->get(sensor.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_bool_()) {
+        return dp->bool_();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<int32_t> VSSClient::get<int32_t>(const Sensor<int32_t>& sensor) {
+    auto dp = impl_->get(sensor.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_int32()) {
+        return dp->int32();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<float> VSSClient::get<float>(const Sensor<float>& sensor) {
+    auto dp = impl_->get(sensor.path(), Field::FIELD_VALUE);
+    if (dp.has_value()) {
+        if (dp->has_float_()) return dp->float_();
+        if (dp->has_double_()) return static_cast<float>(dp->double_());
+    }
+    return std::nullopt;
+}
+
+// Attribute get() specializations
+template<>
+std::optional<bool> VSSClient::get<bool>(const Attribute<bool>& attribute) {
+    auto dp = impl_->get(attribute.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_bool_()) {
+        return dp->bool_();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<int32_t> VSSClient::get<int32_t>(const Attribute<int32_t>& attribute) {
+    auto dp = impl_->get(attribute.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_int32()) {
+        return dp->int32();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<std::string> VSSClient::get<std::string>(const Attribute<std::string>& attribute) {
+    auto dp = impl_->get(attribute.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_string()) {
+        return dp->string();
+    }
+    return std::nullopt;
+}
+
+// Actuator get_target() specializations
+template<>
+std::optional<bool> VSSClient::get_target<bool>(const Actuator<bool>& actuator) {
+    auto dp = impl_->get(actuator.path(), Field::FIELD_ACTUATOR_TARGET);
+    if (dp.has_value() && dp->has_bool_()) {
+        return dp->bool_();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<int32_t> VSSClient::get_target<int32_t>(const Actuator<int32_t>& actuator) {
+    auto dp = impl_->get(actuator.path(), Field::FIELD_ACTUATOR_TARGET);
+    if (dp.has_value() && dp->has_int32()) {
+        return dp->int32();
+    }
+    return std::nullopt;
+}
+
+// Actuator get_actual() specializations
+template<>
+std::optional<bool> VSSClient::get_actual<bool>(const Actuator<bool>& actuator) {
+    auto dp = impl_->get(actuator.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_bool_()) {
+        return dp->bool_();
+    }
+    return std::nullopt;
+}
+
+template<>
+std::optional<int32_t> VSSClient::get_actual<int32_t>(const Actuator<int32_t>& actuator) {
+    auto dp = impl_->get(actuator.path(), Field::FIELD_VALUE);
+    if (dp.has_value() && dp->has_int32()) {
+        return dp->int32();
+    }
+    return std::nullopt;
+}
+
+} // namespace sdv::vss

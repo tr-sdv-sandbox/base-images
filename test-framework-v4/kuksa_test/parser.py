@@ -12,7 +12,8 @@ from .models import (
     Requirement, RequirementType,
     StateMachine, StateTransition,
     AutosarInterface, VFFSpec,
-    TestCase, TestStep, TestStepType, TestSuite
+    TestCase, TestStep, TestStepType, TestSuite,
+    Fixture, FixtureType
 )
 
 
@@ -166,26 +167,30 @@ class TestParser:
     def from_dict(data: Dict[str, Any]) -> TestSuite:
         """Parse test suite from dictionary"""
         suite_data = data.get('test_suite', data)
-        
+
         suite = TestSuite(
             name=suite_data.get('name', 'Test Suite'),
             system_spec=suite_data.get('system_spec'),
             metadata=suite_data.get('metadata', {})
         )
-        
+
+        # Parse fixtures
+        if 'fixtures' in suite_data:
+            suite.fixtures = TestParser._parse_fixtures(suite_data['fixtures'])
+
         # Parse setup steps
         if 'setup' in suite_data:
             suite.setup = TestParser._parse_steps(suite_data['setup'])
-            
+
         # Parse test cases
         for case_data in suite_data.get('test_cases', []):
             test_case = TestParser._parse_test_case(case_data)
             suite.test_cases.append(test_case)
-            
+
         # Parse teardown steps
         if 'teardown' in suite_data:
             suite.teardown = TestParser._parse_steps(suite_data['teardown'])
-            
+
         return suite
     
     @staticmethod
@@ -211,7 +216,38 @@ class TestParser:
             test_case.teardown = TestParser._parse_steps(data['teardown'])
             
         return test_case
-    
+
+    @staticmethod
+    def _parse_fixtures(fixtures_data: List[Dict[str, Any]]) -> List[Fixture]:
+        """Parse fixtures from YAML data"""
+        fixtures = []
+
+        for fixture_data in fixtures_data:
+            fixture_type_str = fixture_data.get('type', 'actuator_mirror')
+
+            # Map string to enum
+            try:
+                fixture_type = FixtureType(fixture_type_str)
+            except ValueError:
+                logger.warning(f"Unknown fixture type: {fixture_type_str}, skipping")
+                continue
+
+            fixture = Fixture(
+                name=fixture_data.get('name', f'Fixture {len(fixtures)}'),
+                type=fixture_type,
+                config={}
+            )
+
+            # Copy all config fields except name and type
+            for key, value in fixture_data.items():
+                if key not in ('name', 'type'):
+                    fixture.config[key] = value
+
+            fixtures.append(fixture)
+            logger.debug(f"Parsed fixture: {fixture.name} ({fixture.type.value})")
+
+        return fixtures
+
     @staticmethod
     def _parse_steps(steps_data: List[Any]) -> List[TestStep]:
         """Parse test steps"""
@@ -253,8 +289,11 @@ class TestParser:
             inject_data = data['inject']
             # Handle both single signal and multiple signals format
             if 'path' in inject_data and 'value' in inject_data:
-                # Single signal format
-                step_data['signals'] = {inject_data['path']: inject_data['value']}
+                # Single signal format with optional actuator_mode
+                value_dict = {'value': inject_data['value']}
+                if 'actuator_mode' in inject_data:
+                    value_dict['mode'] = inject_data['actuator_mode']
+                step_data['signals'] = {inject_data['path']: value_dict}
             else:
                 # Multiple signals format
                 step_data['signals'] = inject_data
@@ -271,7 +310,17 @@ class TestParser:
             step_data['machine'] = state_data['machine']
             step_data['state'] = state_data['state']
             timeout = state_data.get('timeout', timeout)
-            
+
+        # expect_transition step
+        elif 'expect_transition' in data:
+            step_type = TestStepType.EXPECT_TRANSITION
+            trans_data = data['expect_transition']
+            step_data['machine'] = trans_data['machine']
+            step_data['from'] = trans_data['from']
+            step_data['to'] = trans_data['to']
+            step_data['trigger'] = trans_data.get('trigger')  # Optional
+            timeout = trans_data.get('timeout', timeout)
+
         # wait step
         elif 'wait' in data:
             step_type = TestStepType.WAIT

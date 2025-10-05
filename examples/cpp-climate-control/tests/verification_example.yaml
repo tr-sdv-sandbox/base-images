@@ -1,0 +1,37 @@
+# Example showing state machine verification in tests
+
+test_suite:
+  name: "State Machine Verification Example"
+  description: "Shows how to verify state machine behavior"
+
+  test_cases:
+    - name: "Basic State Transition"
+      description: "Verify state machine transitions correctly"
+      steps:
+        # Set hot exterior temperature (>= 25°C triggers cooling)
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+
+        - wait: 0.5
+
+        # Trigger climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        - wait: 1.0
+        
+        # Verify the transition happened
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF"
+            to: "CLIMATE_COOLING"
+            trigger: "climate_activate"
+            timeout: 10.0
+        
+        # Verify current state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_COOLING"

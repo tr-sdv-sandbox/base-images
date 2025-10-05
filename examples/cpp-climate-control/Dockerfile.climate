@@ -1,19 +1,21 @@
-FROM alpine:3.18
+# Build stage - use the C++ build image with SDK pre-installed
+FROM sdv-cpp-build:latest AS builder
 
-# Install runtime dependencies
-RUN apk add --no-cache \
-    libstdc++ \
-    libgcc \
-    glog \
-    yaml-cpp
-
-# Copy the compiled climate control binary
-COPY climate_control /app/climate_control
-
-# Make it executable
-RUN chmod +x /app/climate_control
-
+# Copy source files
+COPY examples/cpp-climate-control /app/
 WORKDIR /app
 
+# Build the application (SDK is already installed in /usr/local)
+RUN rm -rf build && mkdir -p build && cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    strip --strip-all climate_control
+
+# Runtime stage - use minimal runtime base image
+FROM sdv-cpp-runtime:latest
+
+# Copy the stripped binary from builder
+COPY --from=builder /app/build/climate_control /usr/local/bin/
+
 # Run the climate control application
-CMD ["/app/climate_control"]
+CMD ["climate_control"]

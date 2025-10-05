@@ -1,0 +1,33 @@
+{
+  "Vehicle": {
+    "type": "branch",
+    "description": "High-level vehicle data.",
+    "children": {
+      "Private": {
+        "type": "branch",
+        "description": "Private/custom vehicle signals not in standard VSS",
+        "children": {
+          "HVAC": {
+            "type": "branch",
+            "description": "Private HVAC control signals",
+            "children": {
+              "MinimumBatteryLevelForAC": {
+                "type": "actuator",
+                "datatype": "float",
+                "unit": "percent",
+                "min": 0,
+                "max": 100,
+                "description": "Minimum battery state of charge required to activate air conditioning"
+              },
+              "ACRequest": {
+                "type": "actuator",
+                "datatype": "boolean",
+                "description": "AC request signal sent to AUTOSAR layer to activate/deactivate climate control"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

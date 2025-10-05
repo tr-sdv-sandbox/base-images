@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
 
-./run-tests-v4.sh -i sdv-cpp-engine-monitor:latest -t examples/cpp-engine-monitor/tests/integration.yaml
+# Climate control functional tests with state machine verification
+./run-tests-v4.sh --image sdv-cpp-climate-control:latest --tests examples/cpp-climate-control/tests/simple_ac_test.yaml
 

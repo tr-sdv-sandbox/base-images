@@ -40,12 +40,26 @@ RUN apt-get update && apt-get install -y \
     libgrpc++-dev \
     libgrpc-dev \
     libgoogle-glog-dev \
+    libyaml-cpp-dev \
     pkg-config \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy proto files from builder with directory structure
 COPY --from=builder /proto/kuksa /usr/local/include/kuksa
+
+# Copy and build SDK
+COPY sdk/cpp /tmp/sdk-build
+RUN cd /tmp/sdk-build && \
+    mkdir -p build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_EXAMPLES=OFF \
+          -DBUILD_TESTS=OFF \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && rm -rf /tmp/sdk-build
 
 # Set environment variables
 ENV KUKSA_ADDRESS="kuksa-val-server" \

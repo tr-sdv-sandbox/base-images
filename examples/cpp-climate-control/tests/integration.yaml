@@ -1,0 +1,71 @@
+---
+# Integration tests for Climate Control System
+
+test_suite:
+  name: "Climate Control System Test"
+  description: "Verify climate control state machine behavior based on VSS signals"
+
+test_cases:
+  - name: "Normal cooling operation"
+    description: "Verify system enters cooling mode when cabin is too warm"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 15000  # 15kW
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 75.0
+          "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature": 28.0
+          "Vehicle.Cabin.Infotainment.HMI.TargetTemperature": 22.0
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: OFF -> IDLE | trigger=power_on"
+          log_contains: "[SM:ClimateControl] STATE: current=IDLE"
+      - wait: "100ms" 
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: IDLE -> COOLING | trigger=start_cooling"
+          log_contains: "[SM:ClimateControl] STATE: current=COOLING"
+          log_contains: "Cooling mode activated"
+      - set_vss:
+          "Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature": 22.3  # Close to target
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: COOLING -> IDLE | trigger=temperature_reached"
+          log_contains: "Cooling mode deactivated"
+          
+  - name: "Low battery prevents start"
+    description: "Verify system goes to error state when battery is too low"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 0  # Engine off
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 15.0  # Low battery
+      - trigger: "power_on"
+        context:
+          engine_running: false
+          battery_level: 15.0
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: OFF -> ERROR | trigger=power_on"
+          log_contains: "[SM:ClimateControl] STATE: current=ERROR"
+          log_contains: "Climate control error - insufficient power"
+          
+  - name: "Defrost overrides other modes"
+    description: "Verify defrost mode takes priority"
+    initial_state: "OFF"
+    steps:
+      - set_vss:
+          "Vehicle.Powertrain.ElectricMotor.Power": 15000
+          "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current": 80.0
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] STATE: current=IDLE"
+      - set_vss:
+          "Vehicle.Powertrain.Range": 45  # Low range triggers eco mode
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: IDLE -> ECO_MODE | trigger=eco_mode_requested"
+      - set_vss:
+          "Vehicle.Body.Windshield.Front.WasherFluid.LevelLow": true
+          "Vehicle.ADAS.CruiseControl.IsActive": true
+      - wait: "100ms"
+      - expect:
+          log_contains: "[SM:ClimateControl] TRANSITION: ECO_MODE -> DEFROST | trigger=defrost_requested"
+          log_contains: "Defrost mode activated - max heat and fan"

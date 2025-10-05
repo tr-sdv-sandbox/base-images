@@ -1,0 +1,571 @@
+test_suite:
+  name: "Functional Test for Remote Climate Control System"
+  description: "Verifies the core functionality of Remote Climate Control System in typical usage scenarios"
+
+  # Hardware simulation fixtures
+  fixtures:
+    - name: "AC Request Hardware Mirror"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Private.HVAC.ACRequest"
+      actual_signal: "Vehicle.Private.HVAC.ACRequest"
+      delay: 0.5
+
+    - name: "Temperature Actuator"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+      actual_signal: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+      delay: 0.2
+
+    - name: "Defroster Actuator"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Cabin.HVAC.IsFrontDefrosterActive"
+      actual_signal: "Vehicle.Cabin.HVAC.IsFrontDefrosterActive"
+      delay: 0.3
+
+    - name: "Window Actuator"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Cabin.Door.Row1.DriverSide.Window.IsOpen"
+      actual_signal: "Vehicle.Cabin.Door.Row1.DriverSide.Window.IsOpen"
+      delay: 0.4
+
+    - name: "Window Position Actuator"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Cabin.Door.Row1.DriverSide.Window.Position"
+      actual_signal: "Vehicle.Cabin.Door.Row1.DriverSide.Window.Position"
+      delay: 0.3
+
+  setup:
+    - description: "Setup initial vehicle conditions"
+      actions:
+        # Set battery state of charge to a good level
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 80.0
+
+        # Set minimum battery threshold for AC operation
+        - inject:
+            path: "Vehicle.Private.HVAC.MinimumBatteryLevelForAC"
+            value: 20.0
+
+        # Set initial climate control to off
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "target"
+        
+        # Set initial temperature request
+        - inject:
+            path: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+            value: 22
+            actuator_mode: "target"
+        
+        # Set initial defroster state
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsFrontDefrosterActive"
+            value: false
+            actuator_mode: "target"
+        
+        # Set initial window state
+        - inject:
+            path: "Vehicle.Cabin.Door.Row1.DriverSide.Window.IsOpen"
+            value: false
+            actuator_mode: "target"
+
+  test_cases:
+    - name: "Remote Climate Activation - Cooling Mode"
+      description: "Tests the activation of remote climate control in cooling mode"
+      requirements: ["REQ-CLIMATE-001", "REQ-CLIMATE-006"]
+      steps:
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+
+        # Set interior temperature
+        - inject:
+            path: "Vehicle.Cabin.HVAC.AmbientAirTemperature"
+            value: 29.0
+
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for system to process the request
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF"
+            to: "CLIMATE_COOLING"
+            trigger: "climate_activate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_COOLING"
+
+        # Verify climate control is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+
+        # Verify temperature is set to cooling value
+        - expect:
+            path: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+            value: 21
+            actuator_mode: "actual"
+
+        # Verify request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: true
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control successfully activated in cooling mode"
+            level: "info"
+
+    - name: "Remote Climate Activation - Heating Mode"
+      description: "Tests the activation of remote climate control in heating mode"
+      requirements: ["REQ-CLIMATE-001", "REQ-CLIMATE-007"]
+      steps:
+        # Set exterior temperature for heating mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 10.0
+
+        # Set interior temperature
+        - inject:
+            path: "Vehicle.Cabin.HVAC.AmbientAirTemperature"
+            value: 12.0
+
+        # Turn off climate control if it was on
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "target"
+
+        - wait: 1.0
+
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for system to process the request
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF"
+            to: "CLIMATE_HEATING"
+            trigger: "climate_activate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_HEATING"
+
+        # Verify climate control is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+
+        # Verify temperature is set to heating value
+        - expect:
+            path: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+            value: 24
+            actuator_mode: "actual"
+
+        # Verify request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: true
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control successfully activated in heating mode"
+            level: "info"
+
+    - name: "Remote Climate Activation with Defrost"
+      description: "Tests the activation of remote climate with defroster in cold temperatures"
+      requirements: ["REQ-CLIMATE-001", "REQ-CLIMATE-008"]
+      steps:
+        # (state verification added after wait)
+        # Set exterior temperature for defrost condition
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 2.0
+        
+        # Set interior temperature
+        - inject:
+            path: "Vehicle.Cabin.HVAC.AmbientAirTemperature"
+            value: 4.0
+        
+        # Turn off climate control if it was on
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "target"
+        
+        - wait: 1.0
+        
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for system to process the request
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF"
+            to: "CLIMATE_HEATING_WITH_DEFROST"
+            trigger: "climate_activate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_HEATING_WITH_DEFROST"
+
+        # Verify climate control is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+
+        # Verify temperature is set to heating value
+        - expect:
+            path: "Vehicle.Cabin.HVAC.Station.Row1.Driver.Temperature"
+            value: 24
+            actuator_mode: "actual"
+
+        # Verify defroster is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsFrontDefrosterActive"
+            value: true
+            actuator_mode: "actual"
+        
+        # Verify request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: true
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control successfully activated with defroster in cold temperature"
+            level: "info"
+
+    - name: "Remote Climate Deactivation"
+      description: "Tests the deactivation of climate control upon user request"
+      requirements: ["REQ-CLIMATE-004"]
+      steps:
+        # (state verification added after wait)
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+        
+        # Activate climate control first
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+        
+        - wait: 1.0
+        
+        # Verify climate was activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+        
+        # Request climate control deactivation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "target"
+
+        # Wait for system to process the request
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_COOLING"
+            to: "CLIMATE_OFF"
+            trigger: "climate_deactivate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_OFF"
+
+        # Verify climate control is deactivated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+        
+        # Verify request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: false
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control successfully deactivated on user request"
+            level: "info"
+
+    - name: "Battery Protection - Low Battery Prevention"
+      description: "Tests that climate control cannot be activated when battery is low"
+      requirements: ["REQ-CLIMATE-005"]
+      steps:
+        # Set battery level below threshold
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 15.0
+        
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+        
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for system to process the request
+        - wait: 1.0
+
+        # Verify state remains CLIMATE_OFF (no transition)
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_OFF"
+
+        # Verify climate control remains deactivated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+        
+        # Verify no request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: false
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control correctly prevented with low battery"
+            level: "info"
+
+    - name: "Battery Protection - Automatic Deactivation"
+      description: "Tests that climate control is deactivated when battery drops below threshold"
+      requirements: ["REQ-CLIMATE-002"]
+      steps:
+        # (state verification added after wait)
+        # Set battery level to sufficient level
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 50.0
+        
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+        
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+        
+        # Wait for system to process the request
+        - wait: 1.0
+        
+        # Verify climate control is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+        
+        # Now drop battery level below threshold
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 10.0
+
+        # Wait for system to process the battery change
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_COOLING"
+            to: "CLIMATE_OFF_LOW_BATTERY"
+            trigger: "battery_low"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_OFF_LOW_BATTERY"
+
+        # Verify climate control is deactivated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+        
+        # Verify request was terminated to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: false
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control correctly deactivated when battery dropped below threshold"
+            level: "info"
+
+    - name: "Battery Recovery - Automatic Reactivation"
+      description: "Tests that climate control is reactivated when battery recovers above threshold"
+      requirements: ["REQ-CLIMATE-003"]
+      steps:
+        # (state verification added after wait)
+        # Set up low battery state first
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 10.0
+        
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 30.0
+        
+        # Request climate control activation (which should be prevented)
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+        
+        # Wait for system to process
+        - wait: 1.0
+        
+        # Verify climate control is not activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+        
+        # Now increase battery level above threshold
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 30.0
+
+        # Wait for system to process the battery change
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF_LOW_BATTERY"
+            to: "CLIMATE_COOLING"
+            trigger: "battery_recovered"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_COOLING"
+
+        # Verify climate control is automatically reactivated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+        
+        # Verify request was sent to AUTOSAR
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: true
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Climate control correctly reactivated when battery recovered above threshold"
+            level: "info"
+
+    - name: "Window Ventilation with Climate Control"
+      description: "Tests that window ventilation works with climate control"
+      requirements: ["REQ-CLIMATE-010"]
+      steps:
+        # (state verification added after wait)
+        # Set battery level to sufficient level
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 80.0
+        
+        # Set exterior temperature for cooling mode
+        - inject:
+            path: "Vehicle.Exterior.AirTemperature"
+            value: 35.0
+        
+        # Request climate control activation
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+        
+        # Wait for system to process the request
+        - wait: 1.0
+        
+        # Verify climate control is activated
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+        
+        # Request window ventilation
+        - inject:
+            path: "Vehicle.Cabin.Door.Row1.DriverSide.Window.IsOpen"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for system to process the window request
+        - wait: 1.0
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_COOLING"
+            to: "CLIMATE_COOLING_WITH_VENTILATION"
+            trigger: "window_open"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_COOLING_WITH_VENTILATION"
+
+        # Verify window is opened
+        - expect:
+            path: "Vehicle.Cabin.Door.Row1.DriverSide.Window.IsOpen"
+            value: true
+            actuator_mode: "actual"
+        
+        # Verify window position is set to 15%
+        - expect:
+            path: "Vehicle.Cabin.Door.Row1.DriverSide.Window.Position"
+            value: 15
+            actuator_mode: "actual"
+        
+        - log:
+            message: "Window ventilation correctly activated with climate control"
+            level: "info"

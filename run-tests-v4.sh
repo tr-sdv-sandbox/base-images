@@ -202,10 +202,35 @@ TOTAL_SUITES=0
 PASSED_SUITES=0
 FAILED_SUITES=0
 
+# Function to merge VSS extensions if present
+merge_vss_with_extensions() {
+    local test_dir="$1"
+    local vss_extensions="${test_dir}/vss_extensions.json"
+
+    # Check if extensions file exists
+    if [ -f "$vss_extensions" ]; then
+        print_info "Found VSS extensions: $vss_extensions" >&2
+
+        # Create temp merged VSS file
+        MERGED_VSS="/tmp/vss_merged_$(date +%s).json"
+
+        # Use Python to merge (jq doesn't handle deep merging well)
+        python3 ./merge-vss-extensions.py \
+            test-data/vss_full.json \
+            "$vss_extensions" \
+            "$MERGED_VSS" >&2
+
+        echo "$MERGED_VSS"
+    else
+        # Return absolute path
+        echo "$(pwd)/test-data/vss_full.json"
+    fi
+}
+
 # Set up cleanup function
 cleanup() {
     print_info "Cleaning up..."
-    
+
     # Stop and remove the test subject container
     if [ "$KEEP_RUNNING" != "true" ]; then
         if docker ps -a | grep -q "$CONTAINER_NAME"; then
@@ -213,7 +238,16 @@ cleanup() {
             docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
             docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
         fi
-        
+
+        # Stop fixture container if it exists
+        if [ -n "$FIXTURE_CONTAINER" ] && docker ps -a | grep -q "$FIXTURE_CONTAINER"; then
+            docker stop "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
+            docker rm "$FIXTURE_CONTAINER" >/dev/null 2>&1 || true
+        fi
+
+        # Clean up temp fixture files
+        rm -f /tmp/fixtures-*.json 2>/dev/null || true
+
         # Stop test framework services
         cd "$COMPOSE_DIR"
         docker-compose -f docker-compose.test.yml down 2>/dev/null || true
@@ -229,10 +263,30 @@ cleanup() {
 # Register cleanup on exit
 trap cleanup EXIT INT TERM
 
+# Determine test directory for VSS extensions
+if [ -f "$TEST_PATH" ]; then
+    TEST_DIR=$(dirname "$TEST_PATH")
+else
+    TEST_DIR="$TEST_PATH"
+fi
+
+# Merge VSS with extensions if present
+VSS_FILE=$(merge_vss_with_extensions "$TEST_DIR")
+export VSS_FILE
+
+# Clean up any stale containers/networks before starting
+print_info "Cleaning up any previous test runs..."
+cd "$COMPOSE_DIR"
+docker-compose -f docker-compose.test.yml down -v 2>/dev/null || true
+cd - > /dev/null
+
+# Remove any stale test containers
+docker ps -a --filter "name=test-subject" --filter "name=fixture-runner" --format "{{.ID}}" 2>/dev/null | xargs -r docker rm -f 2>/dev/null || true
+
 # Start KUKSA databroker using test framework v4 compose
 print_info "Starting KUKSA databroker (test framework v4)..."
 cd "$COMPOSE_DIR"
-docker-compose -f docker-compose.test.yml up -d databroker
+VSS_FILE="$VSS_FILE" docker-compose -f docker-compose.test.yml up -d databroker
 cd - > /dev/null
 
 # Wait for databroker to be ready
@@ -257,6 +311,64 @@ NETWORK_NAME=$(cd "$COMPOSE_DIR" && docker-compose -f docker-compose.test.yml ps
 NETWORK_NAME=$(docker network inspect "$NETWORK_NAME" -f '{{.Name}}' 2>/dev/null || echo "test-framework-v4_default")
 
 print_info "Using network: $NETWORK_NAME"
+
+# Start fixture runner ONCE before test subject if test file has fixtures
+# This ensures providers register BEFORE test subject starts
+FIXTURE_CONTAINER=""
+if [ "${#TEST_FILES[@]}" -eq 1 ]; then
+    FIRST_TEST_FILE="${TEST_FILES[0]}"
+    # Check if test file has fixtures section
+    if grep -q "fixtures:" "$FIRST_TEST_FILE" 2>/dev/null; then
+        print_info "Test has fixtures - starting fixture runner..."
+
+        # Generate fixture config from test YAML
+        FIXTURE_TEMP_FILE="/tmp/fixtures-$(date +%s).json"
+        python3 -c "
+import yaml
+import json
+import sys
+
+with open('$FIRST_TEST_FILE', 'r') as f:
+    spec = yaml.safe_load(f)
+
+fixtures = spec.get('test_suite', {}).get('fixtures', [])
+if fixtures:
+    with open('$FIXTURE_TEMP_FILE', 'w') as out:
+        json.dump({'fixtures': fixtures}, out, indent=2)
+    print(f'Created {len(fixtures)} fixture(s)')
+else:
+    sys.exit(1)
+"
+
+        if [ $? -eq 0 ] && [ -f "$FIXTURE_TEMP_FILE" ]; then
+            chmod 644 "$FIXTURE_TEMP_FILE"
+
+            FIXTURE_CONTAINER="fixture-runner-$(date +%s)"
+            docker run -d \
+                --name "$FIXTURE_CONTAINER" \
+                --network "$NETWORK_NAME" \
+                --mount "type=bind,source=$FIXTURE_TEMP_FILE,target=/app/fixtures.json" \
+                sdv-fixture-runner:latest \
+                fixture-runner --config /app/fixtures.json
+
+            if [ $? -ne 0 ]; then
+                print_error "Failed to start fixture runner"
+                exit 1
+            fi
+
+            print_info "Fixture runner started: $FIXTURE_CONTAINER"
+            print_info "Waiting 3 seconds for providers to register..."
+            sleep 3
+
+            # Verify fixture is still running
+            if ! docker ps | grep -q "$FIXTURE_CONTAINER"; then
+                print_error "Fixture runner stopped unexpectedly"
+                docker logs "$FIXTURE_CONTAINER" 2>&1 | tail -20
+                exit 1
+            fi
+        fi
+    fi
+fi
 
 # Start the user function container
 print_info "Starting container: $CONTAINER_NAME"
@@ -323,7 +435,9 @@ for test_file in "${TEST_FILES[@]}"; do
         --network "$NETWORK_NAME"
         -v "$(realpath "$test_file"):/app/test-suite.yaml:ro"
         -v /var/run/docker.sock:/var/run/docker.sock:ro
+        -v /tmp:/tmp
         -e CONTAINER_NAME="$CONTAINER_NAME"
+        -e FIXTURE_CONTAINER="$FIXTURE_CONTAINER"
         sdv-test-framework-v4:latest
         python -m kuksa_test.cli
         /app/test-suite.yaml

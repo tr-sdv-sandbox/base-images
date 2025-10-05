@@ -75,26 +75,29 @@ class KuksaClient:
     async def get_value(self, path: str, mode: Optional[ActuatorMode] = None) -> SignalValue:
         """
         Get a signal value.
-        
+
         Args:
             path: VSS signal path
             mode: For actuators, specify TARGET or ACTUAL (default: ACTUAL)
-            
+
         Returns:
             SignalValue with current value and metadata
         """
         if not self._connected:
             await self.connect()
-            
+
         try:
-            # Build the full path with mode suffix for actuators
-            full_path = self._build_path(path, mode)
-            
-            # Get current value
-            response = self._client.get_current_values([full_path])
-            
-            if full_path in response:
-                dp = response[full_path]
+            # Use appropriate method based on mode
+            if mode == ActuatorMode.TARGET:
+                response = self._client.get_target_values([path])
+            else:
+                # Default to current/actual values
+                response = self._client.get_current_values([path])
+
+            if path in response:
+                dp = response[path]
+                if dp is None:
+                    raise ValueError(f"Signal {path} has no value set")
                 return SignalValue(
                     path=path,
                     value=self._extract_value(dp),
@@ -103,8 +106,8 @@ class KuksaClient:
                     datapoint=dp
                 )
             else:
-                raise ValueError(f"Signal {full_path} not found")
-                
+                raise ValueError(f"Signal {path} not found")
+
         except Exception as e:
             logger.error(f"Failed to get value for {path}: {e}")
             raise
@@ -112,53 +115,55 @@ class KuksaClient:
     async def set_value(self, path: str, value: Any, mode: Optional[ActuatorMode] = None):
         """
         Set a signal value.
-        
+
         Args:
             path: VSS signal path
             value: Value to set
-            mode: For actuators, specify TARGET or ACTUAL (default: TARGET)
+            mode: For actuators, specify TARGET or ACTUAL. For sensors/attributes, leave as None (uses current values)
         """
         if not self._connected:
             await self.connect()
-            
+
         try:
-            # Build the full path with mode suffix for actuators  
-            full_path = self._build_path(path, mode, default_mode=ActuatorMode.TARGET)
-            
-            # Set value
-            updates = {full_path: self._build_datapoint(value)}
-            self._client.set_current_values(updates)
-            
-            logger.debug(f"Set {full_path} = {value}")
-            
+            # Build datapoint
+            datapoint = self._build_datapoint(value)
+
+            # Use appropriate method based on mode
+            if mode == ActuatorMode.TARGET:
+                # Set target value for actuators
+                self._client.set_target_values({path: datapoint})
+            else:
+                # Default to current values (for sensors, attributes, or actuator actual values)
+                self._client.set_current_values({path: datapoint})
+
+            logger.debug(f"Set {path} = {value} (mode: {mode or 'current'})")
+
         except Exception as e:
             logger.error(f"Failed to set value for {path}: {e}")
             raise
     
     async def get_values(self, paths: List[str]) -> Dict[str, SignalValue]:
-        """Get multiple signal values in one call"""
+        """Get multiple signal values in one call (gets current/actual values)"""
         if not self._connected:
             await self.connect()
-            
+
         try:
-            # Get all values
+            # Get all current values
             response = self._client.get_current_values(paths)
-            
+
             # Convert to SignalValue objects
             result = {}
             for path, dp in response.items():
-                # Extract base path and mode
-                base_path, mode = self._parse_path(path)
-                result[base_path] = SignalValue(
-                    path=base_path,
+                result[path] = SignalValue(
+                    path=path,
                     value=self._extract_value(dp),
-                    mode=mode,
+                    mode=ActuatorMode.ACTUAL,  # Current values are actual
                     timestamp=dp.timestamp.seconds if hasattr(dp.timestamp, 'seconds') else None,
                     datapoint=dp
                 )
-                
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Failed to get values: {e}")
             raise
@@ -167,43 +172,42 @@ class KuksaClient:
         """Set multiple signal values in one call"""
         if not self._connected:
             await self.connect()
-            
+
         try:
-            # Build datapoints
-            datapoints = {}
+            # Separate target and current/actual updates
+            target_updates = {}
+            current_updates = {}
+
             for path, value in updates.items():
                 # Handle actuator paths with mode
                 if isinstance(value, dict) and 'value' in value:
-                    full_path = self._build_path(path, value.get('mode'), ActuatorMode.TARGET)
-                    datapoints[full_path] = self._build_datapoint(value['value'])
+                    mode = value.get('mode')
+                    datapoint = self._build_datapoint(value['value'])
+                    # mode can be either string 'target' or ActuatorMode.TARGET enum
+                    if mode == 'target' or mode == ActuatorMode.TARGET:
+                        target_updates[path] = datapoint
+                    else:
+                        current_updates[path] = datapoint
                 else:
-                    datapoints[path] = self._build_datapoint(value)
-                    
-            # Set all values
-            self._client.set_current_values(datapoints)
-            
-            logger.debug(f"Set {len(datapoints)} values")
-            
+                    # Default to current values for simple values (sensors/attributes)
+                    current_updates[path] = self._build_datapoint(value)
+
+            # Set values using appropriate methods
+            if target_updates:
+                for path in target_updates.keys():
+                    logger.info(f"Injecting {path} [TARGET]")
+                self._client.set_target_values(target_updates)
+            if current_updates:
+                for path in current_updates.keys():
+                    logger.info(f"Injecting {path} [VALUE]")
+                self._client.set_current_values(current_updates)
+
+            logger.debug(f"Set {len(target_updates)} target + {len(current_updates)} current values")
+
         except Exception as e:
             logger.error(f"Failed to set values: {e}")
             raise
     
-    def _build_path(self, base_path: str, mode: Optional[ActuatorMode], 
-                    default_mode: Optional[ActuatorMode] = None) -> str:
-        """Build full VSS path with actuator mode suffix"""
-        if mode:
-            return f"{base_path}.{mode.value.capitalize()}"
-        elif default_mode:
-            return f"{base_path}.{default_mode.value.capitalize()}"
-        return base_path
-    
-    def _parse_path(self, full_path: str) -> tuple[str, Optional[ActuatorMode]]:
-        """Parse VSS path to extract base path and actuator mode"""
-        if full_path.endswith('.Target'):
-            return full_path[:-7], ActuatorMode.TARGET
-        elif full_path.endswith('.Actual'):
-            return full_path[:-7], ActuatorMode.ACTUAL
-        return full_path, None
     
     def _extract_value(self, datapoint: Datapoint) -> Any:
         """Extract value from KUKSA datapoint"""
@@ -215,6 +219,62 @@ class KuksaClient:
         # Datapoint constructor takes the value directly
         return Datapoint(value)
     
+    def subscribe_target_values(self, paths: List[str]):
+        """
+        Subscribe to target value changes for actuators.
+
+        Args:
+            paths: List of VSS signal paths to subscribe to
+
+        Yields:
+            Dict[str, SignalValue] for each update
+        """
+        if not self._connected:
+            raise RuntimeError("Not connected to KUKSA")
+
+        # Subscribe to target values
+        for updates in self._client.subscribe_target_values(paths):
+            result = {}
+            for path, dp in updates.items():
+                if dp is not None:
+                    result[path] = SignalValue(
+                        path=path,
+                        value=self._extract_value(dp),
+                        mode=ActuatorMode.TARGET,
+                        timestamp=dp.timestamp.seconds if hasattr(dp.timestamp, 'seconds') else None,
+                        datapoint=dp
+                    )
+            if result:
+                yield result
+
+    def subscribe_current_values(self, paths: List[str]):
+        """
+        Subscribe to current/actual value changes.
+
+        Args:
+            paths: List of VSS signal paths to subscribe to
+
+        Yields:
+            Dict[str, SignalValue] for each update
+        """
+        if not self._connected:
+            raise RuntimeError("Not connected to KUKSA")
+
+        # Subscribe to current values
+        for updates in self._client.subscribe_current_values(paths):
+            result = {}
+            for path, dp in updates.items():
+                if dp is not None:
+                    result[path] = SignalValue(
+                        path=path,
+                        value=self._extract_value(dp),
+                        mode=ActuatorMode.ACTUAL,
+                        timestamp=dp.timestamp.seconds if hasattr(dp.timestamp, 'seconds') else None,
+                        datapoint=dp
+                    )
+            if result:
+                yield result
+
     async def validate_signal(self, signal: Signal, value: Any) -> bool:
         """Validate a value against signal specification"""
         # Type validation
@@ -227,18 +287,18 @@ class KuksaClient:
                 return False
         elif signal.datatype == "string" and not isinstance(value, str):
             return False
-            
+
         # Range validation
         if isinstance(value, (int, float)):
             if signal.min is not None and value < signal.min:
                 return False
             if signal.max is not None and value > signal.max:
                 return False
-                
+
         # Enum validation
         if signal.enum_values and value not in signal.enum_values:
             return False
-            
+
         return True
 
 

@@ -1,0 +1,131 @@
+test_suite:
+  name: "Simple AC Control Test"
+  description: "Verifies basic AC on/off functionality with KUKSA v2 provider pattern"
+
+  # Hardware simulation fixture (C++ provider)
+  fixtures:
+    - name: "AC Hardware Simulator"
+      type: "actuator_mirror"
+      target_signal: "Vehicle.Private.HVAC.ACRequest"
+      actual_signal: "Vehicle.Private.HVAC.ACRequest"
+      delay: 0.5
+
+  setup:
+    - description: "Setup initial conditions"
+      actions:
+        # Set battery level
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 80.0
+
+        # Set minimum battery threshold
+        - inject:
+            path: "Vehicle.Private.HVAC.MinimumBatteryLevelForAC"
+            value: 20.0
+
+  test_cases:
+    - name: "AC Activation"
+      description: "Tests turning AC on"
+      steps:
+        # Request AC on (test acts as offboard system actuating IsAirConditioningActive)
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for processing
+        - wait: 1.5
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_OFF"
+            to: "CLIMATE_ON"
+            trigger: "climate_activate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_ON"
+
+        # Verify AC actual state (climate app publishes this via provider)
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "actual"
+
+        # Verify hardware request (fixture publishes this via provider)
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: true
+            actuator_mode: "actual"
+
+    - name: "AC Deactivation"
+      description: "Tests turning AC off"
+      steps:
+        # Request AC off
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "target"
+
+        # Wait for processing
+        - wait: 1.5
+
+        # Verify state transition
+        - expect_transition:
+            machine: "RemoteClimateControlStateMachine"
+            from: "CLIMATE_ON"
+            to: "CLIMATE_OFF"
+            trigger: "climate_deactivate"
+
+        # Verify final state
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_OFF"
+
+        # Verify AC actual state
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+
+        # Verify hardware request
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: false
+            actuator_mode: "actual"
+
+    - name: "Low Battery Protection"
+      description: "Tests that AC cannot activate when battery is low"
+      steps:
+        # Set low battery
+        - inject:
+            path: "Vehicle.Powertrain.TractionBattery.StateOfCharge.Current"
+            value: 15.0
+
+        # Request AC on
+        - inject:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: true
+            actuator_mode: "target"
+
+        # Wait for processing
+        - wait: 1.0
+
+        # Verify state remains OFF
+        - expect_state:
+            machine: "RemoteClimateControlStateMachine"
+            state: "CLIMATE_OFF"
+
+        # Verify AC remains off
+        - expect:
+            path: "Vehicle.Cabin.HVAC.IsAirConditioningActive"
+            value: false
+            actuator_mode: "actual"
+
+        # Verify no hardware request
+        - expect:
+            path: "Vehicle.Private.HVAC.ACRequest"
+            value: false
+            actuator_mode: "actual"
