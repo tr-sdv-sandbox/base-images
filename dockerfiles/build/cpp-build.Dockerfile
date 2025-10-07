@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y \
     libgrpc++-dev \
     libgrpc-dev \
     libgoogle-glog-dev \
+    libgtest-dev \
     libyaml-cpp-dev \
     pkg-config \
     ca-certificates \
@@ -49,7 +50,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /proto/kuksa /usr/local/include/kuksa
 
 # Copy and build SDK
-COPY sdk/cpp /tmp/sdk-build
+COPY --from=src ./cpp /tmp/sdk-build
 RUN cd /tmp/sdk-build && \
     mkdir -p build && cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release \
