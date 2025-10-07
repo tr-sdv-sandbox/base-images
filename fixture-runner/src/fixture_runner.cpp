@@ -31,14 +31,14 @@ struct ActuatorFixture {
 
 class FixtureRunner {
 private:
-    ActuatorProvider provider_;
-    VSSClient vss_client_;
+    std::unique_ptr<ActuatorProvider> provider_;
+    std::string kuksa_address_;
     std::vector<ActuatorFixture> fixtures_;
     bool running_ = false;
 
 public:
     FixtureRunner(const std::string& kuksa_address)
-        : provider_(kuksa_address), vss_client_(kuksa_address) {
+        : kuksa_address_(kuksa_address) {
     }
 
     void LoadFixtures(const std::string& config_file) {
@@ -87,40 +87,32 @@ public:
     void Start() {
         running_ = true;
 
-        // Connect to KUKSA with both provider and client
-        if (!provider_.connect()) {
-            LOG(ERROR) << "Failed to connect provider to KUKSA";
+        // Create provider with empty handlers (will add dynamically)
+        provider_ = ActuatorProvider::create(kuksa_address_, {});
+        if (!provider_) {
+            LOG(ERROR) << "Failed to create actuator provider";
             return;
         }
 
-        if (!vss_client_.connect()) {
-            LOG(ERROR) << "Failed to connect VSS client to KUKSA";
-            return;
-        }
-
-        // Collect all actuator paths to claim ownership
-        std::vector<std::string> actuator_paths;
+        // Add dynamic handlers for all fixtures
+        // The provider will query metadata and validate types
         for (const auto& fixture : fixtures_) {
-            actuator_paths.push_back(fixture.target_signal);
             LOG(INFO) << "Fixture: " << fixture.name
                       << " will provide " << fixture.target_signal
                       << " with " << fixture.delay_seconds << "s delay";
+
+            // Add handler using dynamic API (runtime types)
+            // Provider will query KUKSA for the actual type
+            provider_->add_handler_dynamic(
+                fixture.target_signal,
+                ValueType::BOOL,  // Placeholder - provider will use KUKSA's type
+                [this, fixture](const Value& target, const DynamicActuatorOwnerHandle& handle) {
+                    HandleActuation(target, fixture, handle);
+                }
+            );
         }
 
-        // Claim ownership of all actuators
-        if (!provider_.provide_actuators(actuator_paths)) {
-            LOG(ERROR) << "Failed to claim actuator ownership";
-            return;
-        }
-
-        // Register callback for actuation requests
-        provider_.on_actuate_request([this](const ActuationRequest& req) {
-            HandleActuation(req);
-        });
-
-        // Start provider stream
-        provider_.start();
-
+        provider_->start();
         LOG(INFO) << "Started provider for " << fixtures_.size() << " actuator(s)";
     }
 
@@ -133,63 +125,34 @@ public:
 
     void Stop() {
         running_ = false;
-        provider_.stop();
-        provider_.disconnect();
+        if (provider_) {
+            provider_->stop();
+        }
         LOG(INFO) << "All fixtures stopped";
     }
 
 private:
-    // Find fixture definition for a given path
-    const ActuatorFixture* FindFixture(const std::string& path) const {
-        for (const auto& fixture : fixtures_) {
-            if (fixture.target_signal == path) {
-                return &fixture;
-            }
-        }
-        return nullptr;
-    }
-
     // Handle actuation request from databroker
-    void HandleActuation(const ActuationRequest& req) {
-        // Find matching fixture
-        const auto* fixture = FindFixture(req.path);
-        if (!fixture) {
-            LOG(WARNING) << "Received actuation for unknown path: " << req.path;
-            return;
-        }
-
-        LOG(INFO) << "[" << fixture->name << "] Received actuation: "
-                  << req.path << " (id=" << req.signal_id << ")";
+    void HandleActuation(const Value& target, const ActuatorFixture& fixture, const DynamicActuatorOwnerHandle& handle) {
+        LOG(INFO) << "[" << fixture.name << "] Received actuation: "
+                  << handle.path() << " (id=" << handle.id() << ")";
 
         // Simulate hardware delay
-        if (fixture->delay_seconds > 0) {
+        if (fixture.delay_seconds > 0) {
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(
-                    static_cast<int>(fixture->delay_seconds * 1000)
+                    static_cast<int>(fixture.delay_seconds * 1000)
                 )
             );
         }
 
-        // Publish actual value using standalone PublishValue RPC (not provider stream)
-        std::visit([this, &req, fixture](auto&& value) {
-            using T = std::decay_t<decltype(value)>;
+        // Publish actual value using provider->publish_actual()
+        // The handle already has type information, and the provider validates it
+        LOG(INFO) << "[" << fixture.name << "] Publishing actual value for " << handle.path();
 
-            LOG(INFO) << "[" << fixture->name << "] Publishing actual value for " << req.path;
+        provider_->publish_actual(handle, target);
 
-            // Use standalone PublishValue RPC
-            if constexpr (std::is_same_v<T, bool>) {
-                Sensor<bool> sensor(req.path);
-                vss_client_.publish(sensor, value);
-            } else if constexpr (std::is_same_v<T, int32_t>) {
-                Sensor<int32_t> sensor(req.path);
-                vss_client_.publish(sensor, value);
-            } else if constexpr (std::is_same_v<T, float>) {
-                Sensor<float> sensor(req.path);
-                vss_client_.publish(sensor, value);
-            }
-        }, req.value);
-
-        LOG(INFO) << "[" << fixture->name << "] Actuation complete";
+        LOG(INFO) << "[" << fixture.name << "] Actuation complete";
     }
 };
 

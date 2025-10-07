@@ -17,10 +17,29 @@ if(EXISTS "/usr/local/lib/libsdv_vss.a")
 else()
     # Development mode - build SDK from source
     if(NOT DEFINED SDK_PATH)
-        set(SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../sdk/cpp")
+        # Check local path first
+        set(LOCAL_SDK_PATH "$ENV{HOME}/tr-sdv-sandbox/sdk-x/cpp")
+        if(EXISTS "${LOCAL_SDK_PATH}/CMakeLists.txt")
+            set(SDK_PATH "${LOCAL_SDK_PATH}")
+            message(STATUS "Found local SDK at: ${SDK_PATH}")
+        else()
+            # Download from GitHub if not found locally
+            message(STATUS "Local SDK not found, downloading from GitHub")
+            include(FetchContent)
+            FetchContent_Declare(
+                sdk_x
+                GIT_REPOSITORY https://github.com/tr-sdv-sandbox/sdk-x.git
+                GIT_TAG main
+                SOURCE_SUBDIR cpp
+            )
+            FetchContent_MakeAvailable(sdk_x)
+            set(SDK_PATH "${sdk_x_SOURCE_DIR}/cpp")
+        endif()
     endif()
     message(STATUS "Building SDK from source: ${SDK_PATH}")
     set(WITH_STATE_MACHINE OFF CACHE BOOL "Disable state machine" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "Disable SDK tests" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "Disable SDK examples" FORCE)
     add_subdirectory(${SDK_PATH} ${CMAKE_CURRENT_BINARY_DIR}/sdk)
     set(SDK_INCLUDE_DIR ${SDK_PATH}/include)
 endif()
