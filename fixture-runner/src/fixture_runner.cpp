@@ -87,32 +87,39 @@ public:
     void Start() {
         running_ = true;
 
-        // Create provider with empty handlers (will add dynamically)
-        provider_ = ActuatorProvider::create(kuksa_address_, {});
-        if (!provider_) {
-            LOG(ERROR) << "Failed to create actuator provider";
+        // Create provider (connects to KUKSA)
+        auto provider_result = ActuatorProvider::create(kuksa_address_);
+        if (!provider_result.ok()) {
+            LOG(ERROR) << "Failed to create actuator provider: " << provider_result.status();
             return;
         }
+        provider_ = std::move(*provider_result);
 
-        // Add dynamic handlers for all fixtures
-        // The provider will query metadata and validate types
+        // Register handlers for all fixtures using dynamic API
+        // The provider will query metadata and validate types when start() is called
         for (const auto& fixture : fixtures_) {
             LOG(INFO) << "Fixture: " << fixture.name
                       << " will provide " << fixture.target_signal
                       << " with " << fixture.delay_seconds << "s delay";
 
-            // Add handler using dynamic API (runtime types)
-            // Provider will query KUKSA for the actual type
-            provider_->add_handler_dynamic(
+            // Register handler using serve() - validation happens in start()
+            // Use BOOL as placeholder - provider will use KUKSA's actual type
+            provider_->serve(
                 fixture.target_signal,
-                ValueType::BOOL,  // Placeholder - provider will use KUKSA's type
+                ValueType::BOOL,  // Placeholder - provider validates against KUKSA
                 [this, fixture](const Value& target, const DynamicActuatorOwnerHandle& handle) {
                     HandleActuation(target, fixture, handle);
                 }
             );
         }
 
-        provider_->start();
+        // Start provider (validates all handlers atomically)
+        auto start_status = provider_->start();
+        if (!start_status.ok()) {
+            LOG(ERROR) << "Failed to start provider: " << start_status;
+            return;
+        }
+
         LOG(INFO) << "Started provider for " << fixtures_.size() << " actuator(s)";
     }
 
@@ -150,7 +157,11 @@ private:
         // The handle already has type information, and the provider validates it
         LOG(INFO) << "[" << fixture.name << "] Publishing actual value for " << handle.path();
 
-        provider_->publish_actual(handle, target);
+        auto status = provider_->publish_actual(handle, target);
+        if (!status.ok()) {
+            LOG(ERROR) << "[" << fixture.name << "] Failed to publish actual value: " << status;
+            return;
+        }
 
         LOG(INFO) << "[" << fixture.name << "] Actuation complete";
     }
